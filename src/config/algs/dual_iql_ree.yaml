@@ -1,0 +1,35 @@
+# --- Dual_IQL_REE specific parameters ---
+
+# use epsilon greedy action selector
+action_selector: "epsilon_greedy"
+epsilon_start: 1.0
+epsilon_finish: 0.05
+# 500k for 3s5z_vs_3s6z, 6h_vs_8z, otherwise 50k
+# 50,000 for matrix game, predator and prey
+epsilon_anneal_time: 50000
+
+runner: "episode"
+batch_size_run: 1
+
+buffer_size: 5000
+
+# update the target network every {} episodes
+target_update_interval: 200
+
+# use the Q_Learner to train
+agent_output_type: "q"
+
+mac: "dual_ree_mac"
+twin_agent: "hyper_ree_agent"
+learner: "dual_episode_ree_q_learner"
+double_q: True
+
+mixer:  # Mixer becomes None
+
+kl_weight: 10.0
+
+slot_number: 4
+
+device: 0
+
+name: "dual_iql_ree"

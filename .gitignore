@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Results and logs
+results/
+src/results/
+
+# Bundled third-party MAgent environment
+src/envs/magent_env/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Models
+*.pt
+*.pth

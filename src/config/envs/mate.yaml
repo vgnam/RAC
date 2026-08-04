@@ -1,0 +1,16 @@
+env: mate
+
+env_args:
+  mate_config: MATE-4v8-9.yaml
+  levels: 5
+  episode_limit: 1000
+  target_agent: greedy
+
+learner_log_interval: 200
+log_interval: 200
+runner_log_interval: 200
+t_max: 50000
+test_interval: 200
+test_nepisode: 100
+test_greedy: True
+demo_interval: 200
