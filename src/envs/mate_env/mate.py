@@ -58,11 +58,13 @@ class MateEnv(MultiAgentEnv):
 
         self._obs = None
         self.steps = 0
+        self.coverage_rate_sum = 0.0
 
     def reset(self):
         obs = self.env.reset()
         self._obs = np.asarray(obs, dtype=np.float32)
         self.steps = 0
+        self.coverage_rate_sum = 0.0
         return self.get_obs(), self.get_state()
 
     def step(self, actions):
@@ -70,9 +72,13 @@ class MateEnv(MultiAgentEnv):
         obs, reward, done, _ = self.env.step(actions)
         self._obs = np.asarray(obs, dtype=np.float32)
         self.steps += 1
+        self.coverage_rate_sum += float(self.env.coverage_rate)
 
         terminated = bool(done)
-        info = {"episode_limit": False}
+        info = {
+            "episode_limit": False,
+            "coverage_rate": self.coverage_rate_sum / self.steps,
+        }
         if self.steps >= self.episode_limit:
             terminated = True
             info["episode_limit"] = True

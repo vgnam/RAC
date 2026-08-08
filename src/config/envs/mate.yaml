@@ -9,11 +9,16 @@ env_args:
 # Keep the replay buffer on CPU to fit small (4GB) GPUs
 buffer_cpu_only: True
 
+# Return bins used by dual_iql_ree for 1000-step MATE episodes.
+# Values outside this interval are clipped to the lowest/highest slot.
+mate_return_min: -12000.0
+mate_return_max: 0.0
+
 learner_log_interval: 200
 log_interval: 200
 runner_log_interval: 200
 t_max: 1000000
 test_interval: 200
-test_nepisode: 100
+test_nepisode: 5
 test_greedy: True
 demo_interval: 200

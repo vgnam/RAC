@@ -92,10 +92,6 @@ def run(_run, _config, _log):
 
     print("Exiting script")
 
-    # Making sure framework really exits
-    os._exit(getattr(os, "EX_OK", 0))
-
-
 def evaluate_sequential(args, runner):
     n_test_runs = max(1, args.test_nepisode // runner.batch_size)
     for _ in range(n_test_runs):

@@ -54,6 +54,18 @@ class DualEpisodeREEQLearner:
             # For SMAC and SMACv2, we consider continuous returns within [?, ?] ?
             self.possible_returns = np.linspace(0, 25, num=args.slot_number + 1)
 
+        if 'mate' in args.env:
+            return_min = float(getattr(args, 'mate_return_min', -12000.0))
+            return_max = float(getattr(args, 'mate_return_max', 0.0))
+            if return_min >= return_max:
+                raise ValueError(
+                    'mate_return_min must be smaller than mate_return_max, '
+                    f'got {return_min} >= {return_max}.'
+                )
+            self.possible_returns = np.linspace(
+                return_min, return_max, num=args.slot_number + 1
+            )
+
         print("possible returns", self.possible_returns)
 
         self.optimiser = RMSprop(params=self.params, lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
@@ -84,7 +96,7 @@ class DualEpisodeREEQLearner:
             onehot_return_indices = np.eye(self.args.slot_number, dtype=np.int32)[return_indices]  # (bs, max_seq_length, n_agents, slot_number)
             onehot_return_indices = th.from_numpy(onehot_return_indices).to(device=self.args.device, dtype=th.float32)
 
-        elif "stag_hunt" in self.args.env or "sc2" in self.args.env:
+        elif "stag_hunt" in self.args.env or "sc2" in self.args.env or "mate" in self.args.env:
             returns_expand_flat = returns_expand.reshape(-1)    # (bs*max_seq_length*n_agents)
             return_index = np.digitize(returns_expand_flat, bins=self.possible_returns, right=False) - 1
             return_index = np.clip(return_index, 0, self.args.slot_number - 1)

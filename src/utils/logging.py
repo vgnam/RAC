@@ -52,8 +52,11 @@ class Logger:
                 continue
             i += 1
             window = 5 if k != "epsilon" else 1
-            # item = "{:.4f}".format(np.mean([x[1] for x in self.stats[k][-window:]]))
-            item = "{:.4f}".format(th.mean(th.tensor([x[1] for x in self.stats[k][-window:]])))
+            mean_value = th.mean(th.tensor([x[1] for x in self.stats[k][-window:]])).item()
+            if "coverage_rate" in k:
+                item = "{:.4f}%".format(100.0 * mean_value)
+            else:
+                item = "{:.4f}".format(mean_value)
             log_str += "{:<25}{:>8}".format(k + ":", item)
             log_str += "\n" if i % 4 == 0 else "\t"
         self.console_logger.info(log_str)
