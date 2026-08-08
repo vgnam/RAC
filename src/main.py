@@ -5,12 +5,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import collections
 import collections.abc
+import torch as th
 from os.path import dirname, abspath
 from copy import deepcopy
 from sacred import Experiment, SETTINGS
 from sacred.observers import FileStorageObserver
 from sacred.utils import apply_backspaces_and_linefeeds
-import torch as th
 import yaml
 from src.utils.logging import get_logger
 
@@ -105,7 +105,16 @@ if __name__ == '__main__':
     parser.add_argument("--env-config", type=str, default='matrix_game_3', choices=['matrix_game_3', 'pred_prey_punish', 'sc2', 'mate'])
     parser.add_argument("--config", type=str, default='dual_iql_ree',
                         choices=['dual_iql_ree', 'iql', 'hysteretic_q'])
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Maximum number of environment steps used for training (maps to t_max).",
+    )
     args, _ = parser.parse_known_args()
+
+    if args.max_steps is not None and args.max_steps <= 0:
+        parser.error("--max-steps must be a positive integer")
 
     params = deepcopy(sys.argv)
 
@@ -117,8 +126,10 @@ if __name__ == '__main__':
         if skip_next:
             skip_next = False
             continue
-        if p in ("--env-config", "--config") or p.startswith("--env-config=") \
-                or p.startswith("--config="):
+        if p in ("--env-config", "--config", "--max-steps") \
+                or p.startswith("--env-config=") \
+                or p.startswith("--config=") \
+                or p.startswith("--max-steps="):
             if "=" not in p:
                 skip_next = True
             continue
@@ -139,6 +150,8 @@ if __name__ == '__main__':
     # Update original params loaded from default.yaml
     config_dict = recursive_dict_update(config_dict, env_config)
     config_dict = recursive_dict_update(config_dict, alg_config)
+    if args.max_steps is not None:
+        config_dict["t_max"] = args.max_steps
     # config_dict = {**config_dict, **env_config, **alg_config}
 
     # now add all the config to sacred

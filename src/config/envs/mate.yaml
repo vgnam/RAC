@@ -6,10 +6,13 @@ env_args:
   episode_limit: 1000
   target_agent: greedy
 
+# Keep the replay buffer on CPU to fit small (4GB) GPUs
+buffer_cpu_only: True
+
 learner_log_interval: 200
 log_interval: 200
 runner_log_interval: 200
-t_max: 50000
+t_max: 1000000
 test_interval: 200
 test_nepisode: 100
 test_greedy: True

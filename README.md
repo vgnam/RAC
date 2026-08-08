@@ -35,6 +35,12 @@ Also you can select the training algorithm by setting ```--config='dual_iql_ree'
 
 Here ```dual_iql_ree``` refers to ```RAC``` in the submitted paper.
 
+Set the maximum number of training environment steps with `--max-steps`:
+
+```train
+python main.py --env-config mate --config dual_iql_ree --max-steps 2000000
+```
+
 ## Hyper-parameters
 
 To modify the hyper-parameters of algorithms and environments, refer to:
