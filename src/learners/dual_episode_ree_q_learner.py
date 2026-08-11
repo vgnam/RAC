@@ -121,13 +121,36 @@ class DualEpisodeREEQLearner:
         else:
             raise Exception("Not implemented.")
 
+        belief_outputs = None
+        belief_losses = None
+        teacher_diagnostics = None
+        if bool(getattr(self.args, "use_context_belief", False)):
+            belief_outputs = self.mac.infer_context_sequence(batch)
+            belief_tau = float(getattr(self.args, "belief_gumbel_tau", 1.0))
+            if belief_tau <= 0.0:
+                raise ValueError("belief_gumbel_tau must be positive.")
+            context_indices = F.gumbel_softmax(
+                belief_outputs["logits"],
+                tau=belief_tau,
+                hard=True,
+                dim=-1,
+            )
+            belief_losses = self.mac.context_dynamics_loss(
+                batch,
+                belief_outputs["belief"],
+                mask,
+                context_assignments=context_indices,
+            )
+        else:
+            context_indices = onehot_return_indices
+
         # Calculate estimated Q-Values
         mac_out = []
         twin_mac_out = []
         self.mac.init_hidden(batch.batch_size)
         self.mac.init_twin_hidden(batch.batch_size)
         for t in range(batch.max_seq_length):
-            agent_outs, twin_agent_outs = self.mac.train_forward(batch, onehot_return_indices[:, t], t=t)
+            agent_outs, twin_agent_outs = self.mac.train_forward(batch, context_indices[:, t], t=t)
             mac_out.append(agent_outs)
             twin_mac_out.append(twin_agent_outs)
         mac_out = th.stack(mac_out, dim=1)  # Concat over time
@@ -144,15 +167,22 @@ class DualEpisodeREEQLearner:
             counterfactual_twin_mac_out.append(counter_twin_agent_outs)
         counterfactual_twin_mac_out = th.stack(counterfactual_twin_mac_out, dim=1)      # (bs, max_seq_length, n_agents, slot_number, n_actions)
         counterfactual_twin_mac_out = counterfactual_twin_mac_out[:, :-1].permute(0, 1, 2, 4, 3)    # (bs, max_seq_length-1, n_agents, n_actions, slot_number)
-        argmax_counter_twin_mac_out = counterfactual_twin_mac_out.max(dim=-1)[0]   # (bs, max_seq_length-1, n_agents, n_actions)
+        if belief_outputs is not None:
+            teacher_context_q, teacher_diagnostics = self.mac.aggregate_context_q(
+                counterfactual_twin_mac_out,
+                belief_outputs["belief"][:, :-1],
+                belief_outputs["shift"][:, :-1],
+            )
+        else:
+            teacher_context_q = counterfactual_twin_mac_out.max(dim=-1)[0]
 
         # Use counterfactual_twin_mac_out to guide the update of mac_out.
         # Calculate the corresponding softmax action distribution, shape=(bs, max_seq_length-1, n_agents, n_actions)
         mac_q_dist = Categorical(logits=mac_out[:, :-1])
-        argmax_twin_mac_q_dist = Categorical(logits=argmax_counter_twin_mac_out.clone().detach())
+        teacher_mac_q_dist = Categorical(logits=teacher_context_q.clone().detach())
 
         import torch.distributions as D
-        kl_constraint = D.kl_divergence(mac_q_dist, argmax_twin_mac_q_dist)     # Maybe (bs, max_seq_length-1, n_agents)
+        kl_constraint = D.kl_divergence(mac_q_dist, teacher_mac_q_dist)     # Maybe (bs, max_seq_length-1, n_agents)
         kl_mask = mask.clone().expand_as(kl_constraint)
         masked_kl_constraint = kl_constraint * kl_mask
         kl_loss = masked_kl_constraint.sum() / kl_mask.sum()
@@ -167,7 +197,7 @@ class DualEpisodeREEQLearner:
         self.target_mac.init_hidden(batch.batch_size)
         self.target_mac.init_twin_hidden(batch.batch_size)
         for t in range(batch.max_seq_length):
-            target_agent_outs, target_twin_agent_outs = self.target_mac.train_forward(batch, onehot_return_indices[:, t], t=t)
+            target_agent_outs, target_twin_agent_outs = self.target_mac.train_forward(batch, context_indices[:, t].detach(), t=t)
             target_mac_out.append(target_agent_outs)
             target_twin_mac_out.append(target_twin_agent_outs)
 
@@ -219,6 +249,10 @@ class DualEpisodeREEQLearner:
         twin_td_loss = (masked_twin_td_error ** 2).sum() / mask.sum()
 
         loss = twin_td_loss + td_loss + self.args.kl_weight * kl_loss
+        if belief_losses is not None:
+            loss = loss + float(
+                getattr(self.args, "belief_dynamics_weight", 1.0)
+            ) * belief_losses["loss"]
 
         # Optimise
         self.optimiser.zero_grad()
@@ -292,12 +326,99 @@ class DualEpisodeREEQLearner:
                     t_env,
                 )
 
-            teacher_entropy = argmax_twin_mac_q_dist.entropy().detach()
+            teacher_entropy = teacher_mac_q_dist.entropy().detach()
             self.logger.log_stat(
                 "kl_teacher_entropy",
                 ((teacher_entropy * kl_mask).sum() / kl_mask.sum()).item(),
                 t_env,
             )
+
+            if belief_losses is not None:
+                belief_mask = mask
+                belief_mask_elems = belief_mask.sum().clamp_min(1.0)
+                shift = belief_outputs["shift"][:, :-1]
+                self.logger.log_stat(
+                    "context_belief_loss",
+                    belief_losses["loss"].item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "context_reconstruction_loss",
+                    belief_losses["reconstruction"].item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "context_prior_kl",
+                    belief_losses["prior_kl"].item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "context_balance_kl",
+                    belief_losses["balance_kl"].item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "context_uncertainty_mean",
+                    belief_losses["entropy"].item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "context_shift_mean",
+                    ((shift * belief_mask).sum() / belief_mask_elems).item(),
+                    t_env,
+                )
+                valid_shift = shift[belief_mask.bool()]
+                self.logger.log_stat(
+                    "context_shift_max",
+                    valid_shift.max().item(),
+                    t_env,
+                )
+
+                optimism_weight = teacher_diagnostics["optimism_weight"]
+                self.logger.log_stat(
+                    "context_optimism_weight",
+                    (
+                        (optimism_weight * belief_mask).sum()
+                        / belief_mask_elems
+                    ).item(),
+                    t_env,
+                )
+                action_mask = belief_mask.unsqueeze(-1)
+                action_mask_elems = (
+                    action_mask.sum() * self.args.n_actions
+                ).clamp_min(1.0)
+                posterior_q = teacher_diagnostics["posterior_mean"]
+                optimistic_q = teacher_diagnostics["optimistic_max"]
+                self.logger.log_stat(
+                    "context_posterior_q_mean",
+                    ((posterior_q * action_mask).sum() / action_mask_elems).item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "context_optimistic_q_mean",
+                    ((optimistic_q * action_mask).sum() / action_mask_elems).item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "context_optimism_gap",
+                    (
+                        ((optimistic_q - posterior_q) * action_mask).sum()
+                        / action_mask_elems
+                    ).item(),
+                    t_env,
+                )
+
+                belief = belief_outputs["belief"][:, :-1]
+                agent_belief_mask = belief_mask.unsqueeze(-1)
+                belief_slot_mass = (
+                    belief * agent_belief_mask
+                ).sum(dim=(0, 1, 2)) / belief_mask_elems
+                for slot, mass in enumerate(belief_slot_mass):
+                    self.logger.log_stat(
+                        f"belief_slot_{slot}_mass",
+                        mass.item(),
+                        t_env,
+                    )
 
             self.logger.log_stat("episode_returns_min", episode_returns.min().item(), t_env)
             self.logger.log_stat("episode_returns_max", episode_returns.max().item(), t_env)

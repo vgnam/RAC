@@ -52,13 +52,23 @@ def run(_run, _config, _log):
                                                              args.seed,
                                                              args.slot_number,
                                                              datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
-    elif 'dual_iql_ree' == args.name:
-        unique_token = "{}_seed_{}_slot_number_{}_kl_weight_{}_twin_agent_{}_{}".format(args.name,
-                                                                                        args.seed,
-                                                                                        args.slot_number,
-                                                                                        args.kl_weight,
-                                                                                        args.twin_agent,
-                                                                                        datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+    elif args.name in ('dual_iql_ree', 'belief_dual_iql_ree'):
+        if bool(getattr(args, "use_context_belief", False)):
+            unique_token = "{}_seed_{}_slot_number_{}_optimism_{}-{}_{}".format(
+                args.name,
+                args.seed,
+                args.slot_number,
+                args.belief_optimism_min,
+                args.belief_optimism_max,
+                datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
+            )
+        else:
+            unique_token = "{}_seed_{}_slot_number_{}_kl_weight_{}_twin_agent_{}_{}".format(args.name,
+                                                                                            args.seed,
+                                                                                            args.slot_number,
+                                                                                            args.kl_weight,
+                                                                                            args.twin_agent,
+                                                                                            datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
     elif 'hysteretic_q' in args.name:
         unique_token = "{}_seed_{}_beta_{}_{}".format(args.name, args.seed, args.beta, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
     else:

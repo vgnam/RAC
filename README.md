@@ -32,9 +32,34 @@ python main.py
 
 You can select the training task between matrix game, predator and prey, MATE, and SMAC by setting ```--env-config='matrix_game_3'
  or 'pred_prey_punish' or 'mate' or 'sc2'```.
-Also you can select the training algorithm by setting ```--config='dual_iql_ree' or 'iql' or 'hysteretic_q'```
+Also you can select the training algorithm by setting ```--config='dual_iql_ree' or 'belief_dual_iql_ree' or 'iql' or 'hysteretic_q'```
 
 Here ```dual_iql_ree``` refers to ```RAC``` in the submitted paper.
+
+`belief_dual_iql_ree` is the uncertainty-aware extension. It causally infers a
+categorical belief over local dynamics contexts from the current observation and
+the previous action/reward. Action values combine posterior plausibility with
+RAC's cooperative optimism:
+
+```text
+Q_dec = (1 - alpha_t) * E_{c~b_t}[Q_c] + alpha_t * max_c Q_c
+```
+
+`alpha_t` increases with normalized context entropy and context shift, and is
+bounded below by `belief_optimism_min > 0`. Consequently, posterior averaging
+never removes the optimistic component; a uniform belief with
+`belief_optimism_max: 1.0` exactly recovers RAC's maximum over contexts.
+
+Run it with:
+
+```train
+python main.py --env-config mate --config belief_dual_iql_ree --max-steps 2000000
+```
+
+The implementation logs `context_uncertainty_mean`, `context_shift_mean`,
+`context_optimism_weight`, `context_posterior_q_mean`,
+`context_optimistic_q_mean`, `context_optimism_gap`, reconstruction/KL losses,
+and per-context posterior mass.
 
 Set the maximum number of training environment steps with `--max-steps`:
 
@@ -141,6 +166,7 @@ To modify the hyper-parameters of algorithms and environments, refer to:
 
 ```
 src/config/algs/dual_iql_ree.yaml
+src/config/algs/belief_dual_iql_ree.yaml
 src/config/default.yaml
 ```
 ```

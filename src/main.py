@@ -105,7 +105,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='the manual setting of params')
     parser.add_argument("--env-config", type=str, default='matrix_game_3', choices=['matrix_game_3', 'pred_prey_punish', 'sc2', 'mate'])
     parser.add_argument("--config", type=str, default='dual_iql_ree',
-                        choices=['dual_iql_ree', 'iql', 'hysteretic_q'])
+                        choices=['dual_iql_ree', 'belief_dual_iql_ree', 'iql', 'hysteretic_q'])
     parser.add_argument(
         "--max-steps",
         type=int,

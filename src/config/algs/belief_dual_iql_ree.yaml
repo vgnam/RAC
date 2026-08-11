@@ -1,0 +1,49 @@
+# --- Belief-aware Dual IQL REE ---
+
+action_selector: "epsilon_greedy"
+epsilon_start: 1.0
+epsilon_finish: 0.05
+epsilon_anneal_time: 50000
+
+runner: "episode"
+batch_size_run: 1
+buffer_size: 5000
+target_update_interval: 200
+
+agent_output_type: "q"
+mac: "dual_ree_mac"
+twin_agent: "hyper_ree_agent"
+learner: "dual_episode_ree_q_learner"
+double_q: true
+mixer:
+
+kl_weight: 10.0
+slot_number: 4
+
+# Infer a causal distribution over latent local-dynamics contexts from
+# (o_t, a_{t-1}, r_{t-1}) instead of revealing episodic return at execution.
+use_context_belief: true
+belief_direct_action: true
+belief_hidden_dim: 64
+belief_decoder_hidden_dim: 128
+belief_projection_dim: 16
+belief_include_agent_id: true
+belief_temperature: 1.0
+belief_transition_stay: 0.95
+belief_prior_strength: 1.0
+belief_gumbel_tau: 1.0
+
+# Self-supervised context model: projected local transition and reward.
+belief_dynamics_weight: 1.0
+belief_reward_loss_weight: 1.0
+belief_kl_weight: 0.001
+belief_balance_weight: 0.01
+
+# Q_dec = (1-alpha) E_b[Q_c] + alpha max_c Q_c.
+# alpha never reaches zero, preserving RAC's cooperative optimism. A fully
+# uncertain belief reaches alpha=1 and exactly recovers max_c Q_c.
+belief_optimism_min: 0.25
+belief_optimism_max: 1.0
+
+device: 0
+name: "belief_dual_iql_ree"
