@@ -22,6 +22,7 @@ learner: "q_learner"
 double_q: True
 mixer: # Mixer becomes None
 
-device: 7
+# Local training machine exposes its primary GPU as cuda:0.
+device: 0
 
 name: "iql"

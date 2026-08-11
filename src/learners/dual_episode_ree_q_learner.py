@@ -24,6 +24,19 @@ class DualEpisodeREEQLearner:
         self.params = list(mac.parameters())
 
         self.last_target_update_episode = 0
+        self.last_target_update_t = 0
+        self.target_update_interval_steps = getattr(
+            args, "target_update_interval_steps", None
+        )
+        if self.target_update_interval_steps is not None:
+            self.target_update_interval_steps = int(
+                self.target_update_interval_steps
+            )
+            if self.target_update_interval_steps <= 0:
+                raise ValueError(
+                    "target_update_interval_steps must be positive, got "
+                    f"{self.target_update_interval_steps}."
+                )
 
         self.mixer = None
         if args.mixer is not None:
@@ -55,8 +68,8 @@ class DualEpisodeREEQLearner:
             self.possible_returns = np.linspace(0, 25, num=args.slot_number + 1)
 
         if 'mate' in args.env:
-            return_min = float(getattr(args, 'mate_return_min', -12000.0))
-            return_max = float(getattr(args, 'mate_return_max', 0.0))
+            return_min = float(getattr(args, 'mate_return_min', 0.0))
+            return_max = float(getattr(args, 'mate_return_max', 1000.0))
             if return_min >= return_max:
                 raise ValueError(
                     'mate_return_min must be smaller than mate_return_max, '
@@ -213,7 +226,11 @@ class DualEpisodeREEQLearner:
         grad_norm = th.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
         self.optimiser.step()
 
-        if (episode_num - self.last_target_update_episode) / self.args.target_update_interval >= 1.0:
+        if self.target_update_interval_steps is not None:
+            if t_env - self.last_target_update_t >= self.target_update_interval_steps:
+                self._update_targets()
+                self.last_target_update_t = t_env
+        elif (episode_num - self.last_target_update_episode) / self.args.target_update_interval >= 1.0:
             self._update_targets()
             self.last_target_update_episode = episode_num
 
@@ -222,14 +239,79 @@ class DualEpisodeREEQLearner:
             self.logger.log_stat("kl_loss", (self.args.kl_weight * kl_loss).item(), t_env)
             self.logger.log_stat("twin_td_loss", twin_td_loss.item(), t_env)
 
+            mask_elems = mask.sum()
+            valid_twin_td_errors = twin_td_error.detach().abs()[mask.bool()]
+            self.logger.log_stat(
+                "twin_td_error_abs",
+                valid_twin_td_errors.mean().item(),
+                t_env,
+            )
+            self.logger.log_stat(
+                "twin_td_error_max",
+                valid_twin_td_errors.max().item(),
+                t_env,
+            )
+            self.logger.log_stat(
+                "twin_td_error_p95",
+                th.quantile(valid_twin_td_errors.float(), 0.95).item(),
+                t_env,
+            )
+            self.logger.log_stat(
+                "twin_q_taken_mean",
+                ((chosen_twin_action_qvals.detach() * mask).sum() / mask_elems).item(),
+                t_env,
+            )
+            self.logger.log_stat(
+                "twin_target_mean",
+                ((twin_targets.detach() * mask).sum() / mask_elems).item(),
+                t_env,
+            )
+
+            terminal_flags = terminated.expand_as(twin_td_error)
+            terminal_mask = mask * terminal_flags
+            nonterminal_mask = mask * (1.0 - terminal_flags)
+            squared_twin_td_error = twin_td_error.detach().pow(2)
+            terminal_elems = terminal_mask.sum()
+            if terminal_elems.item() > 0:
+                self.logger.log_stat(
+                    "twin_loss_terminal",
+                    (
+                        (squared_twin_td_error * terminal_mask).sum()
+                        / terminal_elems
+                    ).item(),
+                    t_env,
+                )
+            nonterminal_elems = nonterminal_mask.sum()
+            if nonterminal_elems.item() > 0:
+                self.logger.log_stat(
+                    "twin_loss_nonterminal",
+                    (
+                        (squared_twin_td_error * nonterminal_mask).sum()
+                        / nonterminal_elems
+                    ).item(),
+                    t_env,
+                )
+
+            teacher_entropy = argmax_twin_mac_q_dist.entropy().detach()
+            self.logger.log_stat(
+                "kl_teacher_entropy",
+                ((teacher_entropy * kl_mask).sum() / kl_mask.sum()).item(),
+                t_env,
+            )
+
             self.logger.log_stat("episode_returns_min", episode_returns.min().item(), t_env)
             self.logger.log_stat("episode_returns_max", episode_returns.max().item(), t_env)
+            episode_return_slots = return_indices[:, 0, 0].reshape(-1)
+            slot_counts = np.bincount(
+                episode_return_slots, minlength=self.args.slot_number
+            )
+            slot_fractions = slot_counts / max(1, episode_return_slots.size)
+            for slot, fraction in enumerate(slot_fractions):
+                self.logger.log_stat(
+                    f"return_slot_{slot}_fraction", float(fraction), t_env
+                )
 
             # self.logger.log_stat("grad_norm", grad_norm, t_env)
-            # mask_elems = mask.sum().item()
-            # self.logger.log_stat("td_error_abs", (masked_twin_td_error.abs().sum().item()/mask_elems), t_env)
-            # self.logger.log_stat("q_taken_mean", (chosen_twin_action_qvals * mask).sum().item()/(mask_elems * self.args.n_agents), t_env)
-            # self.logger.log_stat("target_mean", (twin_targets * mask).sum().item()/(mask_elems * self.args.n_agents), t_env)
             self.log_stats_t = t_env
 
     def _update_targets(self):

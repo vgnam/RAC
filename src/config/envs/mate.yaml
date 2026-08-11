@@ -3,22 +3,62 @@ env: mate
 env_args:
   mate_config: MATE-4v8-9.yaml
   levels: 5
-  episode_limit: 1000
+  # Official camera baselines use a 500-decision horizon and repeat each
+  # selected action for five simulator frames.
+  episode_limit: 500
+  frame_skip: 5
   target_agent: greedy
+  target_agent_seed: 0
+  relative_coordinates: true
+  rescale_observation: true
+  repeat_reward_individual_done: true
+  coverage_reward: true
+  coverage_reward_coefficient: 1.0
+  reward_reduction: mean
 
-# Keep the replay buffer on CPU to fit small (4GB) GPUs
+# Match the official MATE IQL camera backbone: a shared feed-forward
+# 512 -> 512 -> 256 tanh MLP with no recurrent layer. The selected algorithm
+# keeps its own output head on top of the shared 256-D features.
+agent: ff
+rnn_hidden_dim: 256
+agent_mlp_dims: [512, 512, 256]
+agent_activation: tanh
+agent_orthogonal_init: true
+agent_recurrent: false
+obs_agent_id: false
+obs_last_action: false
+
+# Five gradient passes over 8 replayed episodes keeps the existing Dual-REE
+# update ratio while the environment/reward pipeline follows MATE.
+batch_size: 8
+training_iters: 5
+buffer_size: 1000
+# RAC updates its target network by trained environment steps. Keep the legacy
+# episode interval for learners that do not consume target_update_interval_steps.
+target_update_interval_steps: 500
+target_update_interval: 1
+
+epsilon_finish: 0.02
+epsilon_anneal_time: 50000
+
+# Keep the replay buffer on CPU to fit small (4GB) GPUs.
 buffer_cpu_only: True
 
-# Return bins used by dual_iql_ree for 1000-step MATE episodes.
-# Values outside this interval are clipped to the lowest/highest slot.
-mate_return_min: -12000.0
-mate_return_max: 0.0
+# Use a fixed effective MATE return range with headroom above the observed
+# maximum (~658). The learner divides this range into 10 equal-width slots
+# (width = 1000 / 10 = 100).
+slot_number: 10
+mate_return_min: 0.0
+mate_return_max: 1000.0
 
-learner_log_interval: 200
-log_interval: 200
-runner_log_interval: 200
+# Match the Predator-Prey coefficient reported in the RAC paper.
+kl_weight: 1.0
+
+learner_log_interval: 5000
+log_interval: 5000
+runner_log_interval: 5000
 t_max: 1000000
-test_interval: 200
-test_nepisode: 5
+test_interval: 5000
+test_nepisode: 20
 test_greedy: True
-demo_interval: 200
+demo_interval: 5000

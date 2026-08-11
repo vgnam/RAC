@@ -66,6 +66,26 @@ def run(_run, _config, _log):
 
     args.unique_token = unique_token
 
+    if args.env == 'sc2':
+        scenario = args.env_args['map_name']
+    elif args.env == 'mate':
+        scenario = args.env_args.get('mate_config', 'mate')
+    else:
+        scenario = args.env
+    scenario_path = str(scenario).replace('/', '_').replace('\\', '_')
+
+    metrics_root = os.path.join(
+        args.local_results_path, "metrics", args.env, scenario_path, args.name
+    )
+    metrics_file = os.path.join(metrics_root, unique_token, "metrics.csv")
+    logger.setup_csv(metrics_file, {
+        "run_id": unique_token,
+        "algorithm": args.name,
+        "env": args.env,
+        "scenario": scenario,
+        "seed": args.seed,
+    })
+
     if args.use_tensorboard:
         if args.env == 'sc2':
             tb_logs_direc = os.path.join(dirname(dirname(abspath(__file__))), "results", "tb_logs", args.env, args.env_args['map_name'], args.name)
@@ -74,11 +94,44 @@ def run(_run, _config, _log):
         tb_exp_direc = os.path.join(tb_logs_direc, "{}").format(unique_token)
         logger.setup_tb(tb_exp_direc)
 
+    if args.use_wandb:
+        wandb_tags = list(getattr(args, "wandb_tags", []) or [])
+        wandb_tags.extend([args.env, args.name, str(scenario)])
+        logger.setup_wandb(
+            config=_config,
+            project=args.wandb_project,
+            entity=getattr(args, "wandb_entity", None),
+            group=getattr(args, "wandb_group", None),
+            tags=wandb_tags,
+            mode=args.wandb_mode,
+            run_name=getattr(args, "wandb_run_name", None) or unique_token,
+            directory=os.path.join(args.local_results_path, "wandb"),
+        )
+
     # sacred is on by default
     logger.setup_sacred(_run)
 
-    # Run and train
-    run_sequential(args=args, logger=logger)
+    # Run and train. Always flush CSV/TensorBoard, including failed runs.
+    try:
+        run_sequential(args=args, logger=logger)
+    finally:
+        logger.close()
+        try:
+            from src.plot_metrics import plot_metric
+
+            plot_root = os.path.join(args.local_results_path, "plots", args.env, scenario_path)
+            for metric in ("test_return_mean", "test_coverage_rate_mean"):
+                output_path = os.path.join(plot_root, "{}.png".format(metric))
+                if plot_metric(
+                    root=os.path.join(args.local_results_path, "metrics"),
+                    metric=metric,
+                    output=output_path,
+                    env=args.env,
+                    scenario=str(scenario),
+                ):
+                    _log.info("Updated aggregate plot %s", output_path)
+        except Exception as exc:
+            _log.warning("Could not update aggregate plots: %s", exc)
 
     # Clean up after finishing
     print("Exiting Main")

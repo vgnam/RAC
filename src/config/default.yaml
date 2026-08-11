@@ -18,6 +18,13 @@ buffer_cpu_only: False # If true we won't keep all of the replay buffer in vram
 
 # --- Logging options ---
 use_tensorboard: True # Log results to tensorboard
+use_wandb: False # Enable Weights & Biases logging
+wandb_project: "rac-marl"
+wandb_entity: null # Optional W&B user or team
+wandb_group: null # Optional group for seed comparisons
+wandb_run_name: null # Defaults to the generated unique run name
+wandb_tags: []
+wandb_mode: "online" # online, offline, or disabled
 save_model: False # Save the models to disk
 save_model_interval: 100000 # Save models after this many timesteps
 checkpoint_path: "" # Load a checkpoint from this path

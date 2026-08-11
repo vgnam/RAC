@@ -1,0 +1,17 @@
+# Some Kaggle runtimes currently pair older GPUs with a PyTorch wheel that no
+# longer contains kernels for their CUDA compute capability. Pin the official
+# CUDA 12.1 wheel, which supports Python 3.12 and the Kaggle GPU architectures.
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1+cu121
+
+# Kaggle already provides pandas, matplotlib, and most scientific packages.
+# Keep the remaining list focused on this repository's MATE training path.
+setuptools<81
+numpy<2
+gym==0.22.0
+pygame>=2.5,<3
+PyYAML>=6,<7
+sacred>=0.8.2,<0.9
+tensorboardX>=2.6,<3
+wandb>=0.22.3
+git+https://github.com/XuehaiPan/mate.git#egg=mate

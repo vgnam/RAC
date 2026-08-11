@@ -16,8 +16,9 @@ from src.utils.logging import get_logger
 
 
 from src.run import run
-# 'fd' for linux, 'sys' for windows
-SETTINGS['CAPTURE_MODE'] = "sys" # set to "no" if you want to see stdout/stderr in console
+# Sacred uses file-descriptor capture on Linux/Kaggle and stream capture on
+# Windows. This keeps console output and run metadata working on both systems.
+SETTINGS['CAPTURE_MODE'] = "sys" if os.name == "nt" else "fd"
 logger = get_logger()
 
 ex = Experiment("pymarl")
@@ -147,9 +148,11 @@ if __name__ == '__main__':
     # alg_config = _get_config(params, "--config", "algs")
     env_config = _get_config_from_argparse(args, "--env-config", "envs")
     alg_config = _get_config_from_argparse(args, "--config", "algs")
-    # Update original params loaded from default.yaml
-    config_dict = recursive_dict_update(config_dict, env_config)
+    # Apply algorithm defaults first, then environment-specific overrides.
+    # This lets long-horizon environments such as MATE adjust replay/training
+    # cadence without changing the shared algorithm configuration.
     config_dict = recursive_dict_update(config_dict, alg_config)
+    config_dict = recursive_dict_update(config_dict, env_config)
     if args.max_steps is not None:
         config_dict["t_max"] = args.max_steps
     # config_dict = {**config_dict, **env_config, **alg_config}
