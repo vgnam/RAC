@@ -1,5 +1,12 @@
 import numpy as np
 
+# MATE 0.1.0 uses ``np.bool8`` throughout its environment implementation.
+# NumPy 2 removed that alias in favor of ``np.bool_``.  Define the old name
+# before importing MATE so the environment works with either NumPy major
+# version without requiring a process-wide package downgrade.
+if not hasattr(np, "bool8"):
+    np.bool8 = np.bool_
+
 import mate
 
 from src.envs.multiagentenv import MultiAgentEnv
