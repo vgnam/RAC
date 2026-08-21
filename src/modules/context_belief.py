@@ -119,7 +119,13 @@ class ContextBeliefModel(nn.Module):
             nn.Linear(filter_input_dim, self.hidden_dim),
             nn.ReLU(),
         )
-        self.filter_rnn = nn.GRUCell(self.hidden_dim, self.hidden_dim)
+        # A full GRU supports both causal one-step filtering at execution and
+        # a fused cuDNN sequence path during replay training.
+        self.filter_rnn = nn.GRU(
+            self.hidden_dim,
+            self.hidden_dim,
+            batch_first=True,
+        )
         self.evidence_head = nn.Linear(self.hidden_dim, self.n_contexts)
         # Start from an exactly uniform belief rather than arbitrary confidence.
         nn.init.zeros_(self.evidence_head.weight)
@@ -195,10 +201,15 @@ class ContextBeliefModel(nn.Module):
         inputs = th.cat(inputs, dim=-1)
 
         encoded = self.filter_encoder(inputs.reshape(batch_size * self.n_agents, -1))
-        next_hidden = self.filter_rnn(
-            encoded,
-            hidden.reshape(batch_size * self.n_agents, self.hidden_dim),
-        ).reshape(batch_size, self.n_agents, self.hidden_dim)
+        _, next_hidden = self.filter_rnn(
+            encoded.unsqueeze(1),
+            hidden.reshape(
+                1, batch_size * self.n_agents, self.hidden_dim
+            ).contiguous(),
+        )
+        next_hidden = next_hidden.squeeze(0).reshape(
+            batch_size, self.n_agents, self.hidden_dim
+        )
 
         uniform = th.full_like(previous_belief, 1.0 / self.n_contexts)
         predictive_prior = (
@@ -217,33 +228,69 @@ class ContextBeliefModel(nn.Module):
     def infer_sequence(self, batch):
         batch_size = batch.batch_size
         hidden, previous_belief = self.initial_state(batch_size, batch.device)
+        time_steps = batch.max_seq_length
+
+        observations = batch["obs"].reshape(
+            batch_size, time_steps, self.n_agents, self.obs_dim
+        )
+        previous_actions = th.cat(
+            [
+                th.zeros_like(batch["actions_onehot"][:, :1]),
+                batch["actions_onehot"][:, :-1],
+            ],
+            dim=1,
+        )
+        previous_rewards = th.cat(
+            [
+                th.zeros_like(batch["reward"][:, :1]),
+                batch["reward"][:, :-1],
+            ],
+            dim=1,
+        ).unsqueeze(2).expand(-1, -1, self.n_agents, -1)
+
+        inputs = [observations, previous_actions, previous_rewards]
+        if self.include_agent_id:
+            agent_ids = self._agent_ids(batch_size, batch.device)
+            inputs.append(
+                agent_ids.unsqueeze(1).expand(-1, time_steps, -1, -1)
+            )
+        inputs = th.cat(inputs, dim=-1)
+        encoded = self.filter_encoder(
+            inputs.reshape(batch_size * time_steps * self.n_agents, -1)
+        ).reshape(batch_size, time_steps, self.n_agents, self.hidden_dim)
+
+        encoded = encoded.permute(0, 2, 1, 3).reshape(
+            batch_size * self.n_agents, time_steps, self.hidden_dim
+        )
+        recurrent_output, final_hidden = self.filter_rnn(
+            encoded,
+            hidden.reshape(
+                1, batch_size * self.n_agents, self.hidden_dim
+            ).contiguous(),
+        )
+        recurrent_output = recurrent_output.reshape(
+            batch_size, self.n_agents, time_steps, self.hidden_dim
+        ).permute(0, 2, 1, 3)
+        evidence_logits = self.evidence_head(recurrent_output) / self.temperature
+
         beliefs = []
         logits = []
         priors = []
         shifts = []
 
-        zero_action = th.zeros_like(batch["actions_onehot"][:, 0])
-        zero_reward = th.zeros_like(batch["reward"][:, 0])
-        for t in range(batch.max_seq_length):
-            previous_action = (
-                zero_action if t == 0 else batch["actions_onehot"][:, t - 1]
+        uniform = th.full_like(previous_belief, 1.0 / self.n_contexts)
+        for timestep in range(time_steps):
+            predictive_prior = (
+                self.transition_stay * previous_belief
+                + (1.0 - self.transition_stay) * uniform
             )
-            previous_reward = (
-                zero_reward if t == 0 else batch["reward"][:, t - 1]
+            posterior_logits = (
+                evidence_logits[:, timestep]
+                + self.prior_strength
+                * predictive_prior.clamp_min(1e-8).log()
             )
-            (
-                belief,
-                posterior_logits,
-                hidden,
-                predictive_prior,
-                shift,
-            ) = self.filter_step(
-                batch["obs"][:, t],
-                previous_action,
-                previous_reward,
-                hidden,
-                previous_belief,
-            )
+            belief = F.softmax(posterior_logits, dim=-1)
+            shift = normalized_js_divergence(belief, predictive_prior)
             beliefs.append(belief)
             logits.append(posterior_logits)
             priors.append(predictive_prior)

@@ -49,12 +49,43 @@ def _get_config(params, arg_name, subfolder):
             break
 
     if config_name is not None:
-        with open(os.path.join(os.path.dirname(__file__), "config", subfolder, "{}.yaml".format(config_name)), "r") as f:
-            try:
-                config_dict = yaml.load(f, Loader=yaml.FullLoader)
-            except yaml.YAMLError as exc:
-                assert False, "{}.yaml error: {}".format(config_name, exc)
+        return _load_config(config_name, subfolder)
+
+
+def _load_config(config_name, subfolder, inheritance_stack=()):
+    """Load a config and recursively merge its optional ``extends`` parent."""
+    if os.path.basename(config_name) != config_name:
+        raise ValueError("Config names may not contain path components")
+    if config_name in inheritance_stack:
+        chain = " -> ".join(inheritance_stack + (config_name,))
+        raise ValueError("Circular config inheritance: {}".format(chain))
+
+    path = os.path.join(
+        os.path.dirname(__file__),
+        "config",
+        subfolder,
+        "{}.yaml".format(config_name),
+    )
+    with open(path, "r") as config_file:
+        try:
+            config_dict = yaml.load(config_file, Loader=yaml.FullLoader) or {}
+        except yaml.YAMLError as exc:
+            raise ValueError("{}.yaml error: {}".format(config_name, exc))
+
+    parent_name = config_dict.pop("extends", None)
+    if parent_name is None:
         return config_dict
+    if not isinstance(parent_name, str):
+        raise ValueError(
+            "{}.yaml: extends must name one parent config".format(config_name)
+        )
+
+    parent = _load_config(
+        parent_name,
+        subfolder,
+        inheritance_stack + (config_name,),
+    )
+    return recursive_dict_update(parent, config_dict)
 
 
 def _get_config_from_argparse(args, arg_name, subfolder):
@@ -65,12 +96,7 @@ def _get_config_from_argparse(args, arg_name, subfolder):
         config_name = args.config
 
     if config_name is not None:
-        with open(os.path.join(os.path.dirname(__file__), "config", subfolder, "{}.yaml".format(config_name)), "r") as f:
-            try:
-                config_dict = yaml.load(f, Loader=yaml.FullLoader)
-            except yaml.YAMLError as exc:
-                assert False, "{}.yaml error: {}".format(config_name, exc)
-        return config_dict
+        return _load_config(config_name, subfolder)
 
 
 def recursive_dict_update(d, u):
@@ -103,9 +129,25 @@ def parse_command(params, key, default):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='the manual setting of params')
-    parser.add_argument("--env-config", type=str, default='matrix_game_3', choices=['matrix_game_3', 'pred_prey_punish', 'sc2', 'mate'])
+    parser.add_argument(
+        "--env-config",
+        type=str,
+        default='matrix_game_3',
+        choices=[
+            'matrix_game_3',
+            'pred_prey_punish',
+            'sc2',
+            'mate',
+            'mate_ippo',
+            'mate_ippo_4v2_9',
+            'mate_ippo_4v8_0',
+            'mate_ippo_8v8_9',
+            'mate_entity_gru',
+            'mate_belief_entity_gru',
+        ],
+    )
     parser.add_argument("--config", type=str, default='dual_iql_ree',
-                        choices=['dual_iql_ree', 'belief_dual_iql_ree', 'iql', 'hysteretic_q'])
+                        choices=['dual_iql_ree', 'belief_dual_iql_ree', 'iql', 'ippo', 'hysteretic_q'])
     parser.add_argument(
         "--max-steps",
         type=int,

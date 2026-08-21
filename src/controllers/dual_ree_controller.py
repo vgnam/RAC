@@ -120,15 +120,75 @@ class DualREEMAC:
         return agent_outs.view(ep_batch.batch_size, self.n_agents, -1), \
             twin_agent_outs.view(ep_batch.batch_size, self.n_agents, -1)
 
+    def train_forward_sequence(self, ep_batch, return_indices):
+        """Evaluate main and context-conditioned twin Q over a replay episode."""
+        if not (
+            hasattr(self.agent, "forward_sequence")
+            and hasattr(self.twin_agent, "forward_sequence")
+        ):
+            agent_outputs = []
+            twin_outputs = []
+            for timestep in range(ep_batch.max_seq_length):
+                agent_q, twin_q = self.train_forward(
+                    ep_batch, return_indices[:, timestep], t=timestep
+                )
+                agent_outputs.append(agent_q)
+                twin_outputs.append(twin_q)
+            return th.stack(agent_outputs, dim=1), th.stack(twin_outputs, dim=1)
+
+        inputs = self._build_sequence_inputs(ep_batch)
+        agent_outputs, self.hidden_states = self.agent.forward_sequence(
+            inputs, self.hidden_states
+        )
+        twin_outputs, self.twin_hidden_states = self.twin_agent.forward_sequence(
+            inputs, return_indices, self.twin_hidden_states
+        )
+        return agent_outputs, twin_outputs
+
     def counter_forward(self, ep_batch, return_indices, t):
         # return_indices.shape=(bs, n_agents, slot_number, slot_number)
         agent_inputs = self._build_inputs(ep_batch, t)      # (bs*n_agents, input_shape)
+        if hasattr(self.twin_agent, "counterfactual_step"):
+            twin_outputs, self.twin_counter_hidden_states = (
+                self.twin_agent.counterfactual_step(
+                    agent_inputs, self.twin_counter_hidden_states
+                )
+            )
+            return twin_outputs.view(
+                ep_batch.batch_size,
+                self.n_agents,
+                self.args.slot_number,
+                -1,
+            )
+
         agent_inputs_rep = agent_inputs.unsqueeze(dim=1).expand(-1, self.args.slot_number, -1)
         agent_inputs_rep = agent_inputs_rep.reshape(-1, self.input_shape)   # (bs*n_agents*slot_number, input_shape)
         return_indices = return_indices.reshape(-1, self.args.slot_number)  # (bs*n_agents*slot_number, slot_number)
         twin_counter_agent_outs, self.twin_counter_hidden_states = self.twin_agent(agent_inputs_rep, return_indices, self.twin_counter_hidden_states)
 
         return twin_counter_agent_outs.view(ep_batch.batch_size, self.n_agents, self.args.slot_number, -1)
+
+    def counterfactual_sequence(self, ep_batch):
+        """Return Q-values for every context over a complete replay episode."""
+        if hasattr(self.twin_agent, "counterfactual_sequence"):
+            inputs = self._build_sequence_inputs(ep_batch)
+            outputs, self.twin_counter_hidden_states = (
+                self.twin_agent.counterfactual_sequence(
+                    inputs, self.twin_counter_hidden_states
+                )
+            )
+            return outputs
+
+        identity = th.eye(
+            self.args.slot_number, device=ep_batch.device
+        ).view(1, 1, self.args.slot_number, self.args.slot_number)
+        identity = identity.expand(
+            ep_batch.batch_size, self.n_agents, -1, -1
+        )
+        outputs = []
+        for timestep in range(ep_batch.max_seq_length):
+            outputs.append(self.counter_forward(ep_batch, identity, timestep))
+        return th.stack(outputs, dim=1)
 
     def init_hidden(self, batch_size):
         self.hidden_states = self.agent.init_hidden().unsqueeze(0).expand(batch_size, self.n_agents, -1)  # bav
@@ -144,7 +204,20 @@ class DualREEMAC:
         self.twin_hidden_states = self.twin_agent.init_hidden().unsqueeze(0).expand(batch_size, self.n_agents, -1)  # bav
 
     def init_twin_counter_hidden(self, batch_size):
-        self.twin_counter_hidden_states = self.twin_agent.init_hidden().unsqueeze(0).expand(batch_size, self.n_agents * self.args.slot_number, -1)
+        hidden_agents = self.n_agents
+        if not bool(
+            getattr(
+                self.twin_agent,
+                "context_independent_recurrent_core",
+                False,
+            )
+        ):
+            hidden_agents *= self.args.slot_number
+        self.twin_counter_hidden_states = (
+            self.twin_agent.init_hidden()
+            .unsqueeze(0)
+            .expand(batch_size, hidden_agents, -1)
+        )
 
     def parameters(self):
         parameters = list(self.agent.parameters()) + list(self.twin_agent.parameters())
@@ -278,6 +351,27 @@ class DualREEMAC:
 
         inputs = th.cat([x.reshape(bs*self.n_agents, -1) for x in inputs], dim=1)
         return inputs
+
+    def _build_sequence_inputs(self, batch):
+        batch_size = batch.batch_size
+        time_steps = batch.max_seq_length
+        inputs = [batch["obs"]]
+        if self.args.obs_last_action:
+            previous_actions = th.cat(
+                [
+                    th.zeros_like(batch["actions_onehot"][:, :1]),
+                    batch["actions_onehot"][:, :-1],
+                ],
+                dim=1,
+            )
+            inputs.append(previous_actions)
+        if self.args.obs_agent_id:
+            agent_ids = th.eye(self.n_agents, device=batch.device)
+            agent_ids = agent_ids.view(1, 1, self.n_agents, self.n_agents)
+            inputs.append(
+                agent_ids.expand(batch_size, time_steps, -1, -1)
+            )
+        return th.cat(inputs, dim=-1)
 
     def _get_input_shape(self, scheme):
         input_shape = scheme["obs"]["vshape"]

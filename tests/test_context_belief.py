@@ -145,6 +145,60 @@ class ContextBeliefModelTest(unittest.TestCase):
             )
         )
 
+        # The fused replay path must be exactly the same causal filter used
+        # one step at a time during online action selection.
+        hidden, previous_belief = model.initial_state(batch_size, batch.device)
+        step_beliefs = []
+        step_logits = []
+        step_shifts = []
+        for timestep in range(time_steps):
+            previous_action = (
+                th.zeros_like(batch["actions_onehot"][:, 0])
+                if timestep == 0
+                else batch["actions_onehot"][:, timestep - 1]
+            )
+            previous_reward = (
+                th.zeros_like(batch["reward"][:, 0])
+                if timestep == 0
+                else batch["reward"][:, timestep - 1]
+            )
+            belief, logits, hidden, _, shift = model.filter_step(
+                batch["obs"][:, timestep],
+                previous_action,
+                previous_reward,
+                hidden,
+                previous_belief,
+            )
+            step_beliefs.append(belief)
+            step_logits.append(logits)
+            step_shifts.append(shift)
+            previous_belief = belief
+
+        self.assertTrue(
+            th.allclose(
+                outputs["belief"],
+                th.stack(step_beliefs, dim=1),
+                atol=2.0e-6,
+                rtol=1.0e-5,
+            )
+        )
+        self.assertTrue(
+            th.allclose(
+                outputs["logits"],
+                th.stack(step_logits, dim=1),
+                atol=2.0e-6,
+                rtol=1.0e-5,
+            )
+        )
+        self.assertTrue(
+            th.allclose(
+                outputs["shift"],
+                th.stack(step_shifts, dim=1),
+                atol=2.0e-6,
+                rtol=1.0e-5,
+            )
+        )
+
         assignments = F.gumbel_softmax(
             outputs["logits"],
             tau=1.0,

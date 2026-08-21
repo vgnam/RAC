@@ -52,25 +52,19 @@ class QLearner:
         episode_returns = th.sum(batch_rewards, dim=1)      # (bs, 1)
 
         # Calculate estimated Q-Values
-        mac_out = []
         self.mac.init_hidden(batch.batch_size)
-        for t in range(batch.max_seq_length):
-            agent_outs = self.mac.forward(batch, t=t)
-            mac_out.append(agent_outs)
-        mac_out = th.stack(mac_out, dim=1)  # Concat over time
+        mac_out = self.mac.forward_sequence(batch)
 
         # Pick the Q-Values for the actions taken by each agent
         chosen_action_qvals = th.gather(mac_out[:, :-1], dim=3, index=actions).squeeze(3)  # Remove the last dim
 
         # Calculate the Q-Values necessary for the target
-        target_mac_out = []
         self.target_mac.init_hidden(batch.batch_size)
-        for t in range(batch.max_seq_length):
-            target_agent_outs = self.target_mac.forward(batch, t=t)
-            target_mac_out.append(target_agent_outs)
-
-        # We don't need the first timesteps Q-Value estimate for calculating targets
-        target_mac_out = th.stack(target_mac_out[1:], dim=1)  # Concat across time
+        # We don't need the first timestep's value estimate for TD targets.
+        # Target parameters are never optimized; avoiding their autograd graph
+        # substantially reduces memory for long MATE episodes.
+        with th.no_grad():
+            target_mac_out = self.target_mac.forward_sequence(batch)[:, 1:]
 
         # Mask out unavailable actions
         target_mac_out[avail_actions[:, 1:] == 0] = -9999999  # From OG deepmarl

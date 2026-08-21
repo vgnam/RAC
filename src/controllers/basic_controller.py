@@ -58,6 +58,26 @@ class BasicMAC:
 
         return agent_outs.view(ep_batch.batch_size, self.n_agents, -1)
 
+    def forward_sequence(self, ep_batch, test_mode=False):
+        """Evaluate a complete replay sequence, using a fused agent path when available."""
+        if not hasattr(self.agent, "forward_sequence"):
+            self.init_hidden(ep_batch.batch_size)
+            outputs = [
+                self.forward(ep_batch, t=t, test_mode=test_mode)
+                for t in range(ep_batch.max_seq_length)
+            ]
+            return th.stack(outputs, dim=1)
+
+        agent_inputs = self._build_sequence_inputs(ep_batch)
+        agent_outs, self.hidden_states = self.agent.forward_sequence(
+            agent_inputs, self.hidden_states
+        )
+        if self.agent_output_type != "q":
+            raise NotImplementedError(
+                "The fused sequence path currently supports Q-value agents only."
+            )
+        return agent_outs
+
     def init_hidden(self, batch_size):
         self.hidden_states = self.agent.init_hidden().unsqueeze(0).expand(batch_size, self.n_agents, -1)  # bav
 
@@ -95,6 +115,25 @@ class BasicMAC:
 
         inputs = th.cat([x.reshape(bs*self.n_agents, -1) for x in inputs], dim=1)
         return inputs
+
+    def _build_sequence_inputs(self, batch):
+        bs = batch.batch_size
+        time_steps = batch.max_seq_length
+        inputs = [batch["obs"]]
+        if self.args.obs_last_action:
+            previous_actions = th.cat(
+                [
+                    th.zeros_like(batch["actions_onehot"][:, :1]),
+                    batch["actions_onehot"][:, :-1],
+                ],
+                dim=1,
+            )
+            inputs.append(previous_actions)
+        if self.args.obs_agent_id:
+            agent_ids = th.eye(self.n_agents, device=batch.device)
+            agent_ids = agent_ids.view(1, 1, self.n_agents, self.n_agents)
+            inputs.append(agent_ids.expand(bs, time_steps, -1, -1))
+        return th.cat(inputs, dim=-1)
 
     def _get_input_shape(self, scheme):
         input_shape = scheme["obs"]["vshape"]

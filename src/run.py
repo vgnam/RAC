@@ -266,13 +266,25 @@ def run_sequential(args, logger):
         if "maven" not in args.name:
             with th.no_grad():
                 episode_batch = runner.run(test_mode=False)
-                buffer.insert_episode_batch(episode_batch)
+                if not bool(getattr(args, "on_policy", False)):
+                    buffer.insert_episode_batch(episode_batch)
                 # print('cur_buffer_size:', buffer.episodes_in_buffer)
         else:
             episode_batch = runner.run(test_mode=False)
             buffer.insert_episode_batch(episode_batch)
 
-        if buffer.can_sample(args.batch_size):
+        if bool(getattr(args, "on_policy", False)):
+            # PPO must optimize exactly the trajectories collected by the
+            # current behavior policy. Its learner performs all PPO epochs
+            # internally against one frozen old-policy snapshot.
+            episode_sample = episode_batch
+            max_ep_t = episode_sample.max_t_filled()
+            episode_sample = episode_sample[:, :max_ep_t]
+            if episode_sample.device != args.device:
+                episode_sample.to(args.device)
+            learner.train(episode_sample, runner.t_env, episode)
+            del episode_sample
+        elif buffer.can_sample(args.batch_size):
             for _ in range(args.training_iters):
                 episode_sample = buffer.sample(args.batch_size)
 

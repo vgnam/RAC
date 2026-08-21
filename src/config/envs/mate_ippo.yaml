@@ -1,0 +1,28 @@
+# IPPO camera baseline on the repository's default MATE task.
+extends: mate
+
+# Match the official MATE IPPO policy shape with a tanh observation encoder
+# followed by decentralized temporal memory. This codebase uses a GRU cell in
+# place of RLlib's LSTM while preserving the 512 -> 256 -> 256 dimensions.
+agent: rnn
+rnn_hidden_dim: 256
+agent_mlp_dims: [512, 256]
+agent_activation: tanh
+agent_orthogonal_init: true
+agent_recurrent: true
+obs_agent_id: false
+obs_last_action: false
+
+critic_hidden_dim: 256
+critic_mlp_dims: [512, 256]
+critic_activation: tanh
+critic_recurrent: true
+critic_orthogonal_init: true
+
+# The multinomial actor explores by sampling its categorical policy directly;
+# do not inherit MATE's epsilon floor for value-based baselines.
+epsilon_start: 0.0
+epsilon_finish: 0.0
+epsilon_anneal_time: 1
+
+training_iters: 1

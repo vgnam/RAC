@@ -1,0 +1,62 @@
+env: mate
+
+env_args:
+  mate_config: MATE-4v8-9.yaml
+  levels: 5
+  episode_limit: 500
+  frame_skip: 5
+  target_agent: greedy
+  target_agent_seed: 0
+  relative_coordinates: true
+  rescale_observation: true
+  repeat_reward_individual_done: true
+  coverage_reward: true
+  coverage_reward_coefficient: 1.0
+  reward_reduction: mean
+
+# A1 + temporal memory: preserve the typed target/obstacle/camera structure,
+# attend only to visible entities, then recurrently integrate the result.
+agent: mate_entity_gru
+rnn_hidden_dim: 256
+obs_agent_id: false
+obs_last_action: true
+agent_orthogonal_init: true
+
+# Entity layout for MATE-4v8-9. The agent validates the resulting observation
+# width (126), so a mismatched MATE scenario fails early instead of silently
+# slicing the wrong features.
+mate_num_cameras: 4
+mate_num_targets: 8
+mate_num_obstacles: 9
+mate_entity_dim: 128
+mate_entity_mlp_hidden_dim: 128
+mate_attention_heads: 4
+mate_fusion_dim: 256
+mate_previous_action_embedding_dim: 32
+
+batch_size: 8
+training_iters: 5
+buffer_size: 1000
+target_update_interval_steps: 500
+target_update_interval: 1
+
+epsilon_finish: 0.02
+epsilon_anneal_time: 50000
+
+buffer_cpu_only: True
+
+slot_number: 10
+mate_return_min: 0.0
+mate_return_max: 1000.0
+kl_weight: 1.0
+
+learner_log_interval: 5000
+log_interval: 5000
+runner_log_interval: 5000
+save_model: True
+save_model_interval: 30000
+t_max: 1000000
+test_interval: 5000
+test_nepisode: 20
+test_greedy: True
+demo_interval: 5000

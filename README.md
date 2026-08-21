@@ -32,7 +32,7 @@ python main.py
 
 You can select the training task between matrix game, predator and prey, MATE, and SMAC by setting ```--env-config='matrix_game_3'
  or 'pred_prey_punish' or 'mate' or 'sc2'```.
-Also you can select the training algorithm by setting ```--config='dual_iql_ree' or 'belief_dual_iql_ree' or 'iql' or 'hysteretic_q'```
+Also you can select the training algorithm by setting ```--config='dual_iql_ree' or 'belief_dual_iql_ree' or 'ippo' or 'iql' or 'hysteretic_q'```
 
 Here ```dual_iql_ree``` refers to ```RAC``` in the submitted paper.
 
@@ -55,6 +55,35 @@ Run it with:
 ```train
 python main.py --env-config mate --config belief_dual_iql_ree --max-steps 2000000
 ```
+
+### IPPO baseline
+
+`ippo` is an on-policy independent PPO baseline with a shared decentralized
+categorical actor, a local-observation value function, GAE, clipped policy and
+value losses, and entropy regularization. Use the MATE-specific policy preset
+to match the official baseline's 512 -> 256 recurrent model dimensions:
+
+```train
+python main.py --env-config mate_ippo --config ippo --max-steps 1000000
+```
+
+The additional presets keep the same reward and wrapper pipeline while changing
+the official MATE scenario:
+
+| Environment config | MATE scenario | Purpose |
+| --- | --- | --- |
+| `mate_ippo_4v2_9` | `MATE-4v2-9.yaml` | Easier target-sparse task |
+| `mate_ippo_4v8_0` | `MATE-4v8-0.yaml` | Obstacle-free ablation |
+| `mate_ippo_8v8_9` | `MATE-8v8-9.yaml` | Larger camera team |
+
+For example:
+
+```train
+python main.py --env-config mate_ippo_8v8_9 --config ippo --max-steps 1000000
+```
+
+These small presets inherit `mate_ippo.yaml`; environment config inheritance is
+available through an `extends: <parent>` field.
 
 The implementation logs `context_uncertainty_mean`, `context_shift_mean`,
 `context_optimism_weight`, `context_posterior_q_mean`,
@@ -167,12 +196,14 @@ To modify the hyper-parameters of algorithms and environments, refer to:
 ```
 src/config/algs/dual_iql_ree.yaml
 src/config/algs/belief_dual_iql_ree.yaml
+src/config/algs/ippo.yaml
 src/config/default.yaml
 ```
 ```
 src/config/envs/matrix_game_3.yaml
 src/config/envs/pred_prey_punish.yaml
 src/config/envs/mate.yaml
+src/config/envs/mate_ippo.yaml
 src/config/envs/sc2.yaml
 ```
 

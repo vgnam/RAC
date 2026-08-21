@@ -145,27 +145,20 @@ class DualEpisodeREEQLearner:
             context_indices = onehot_return_indices
 
         # Calculate estimated Q-Values
-        mac_out = []
-        twin_mac_out = []
         self.mac.init_hidden(batch.batch_size)
         self.mac.init_twin_hidden(batch.batch_size)
-        for t in range(batch.max_seq_length):
-            agent_outs, twin_agent_outs = self.mac.train_forward(batch, context_indices[:, t], t=t)
-            mac_out.append(agent_outs)
-            twin_mac_out.append(twin_agent_outs)
-        mac_out = th.stack(mac_out, dim=1)  # Concat over time
-        twin_mac_out = th.stack(twin_mac_out, dim=1)    # (bs, max_seq_length, n_agents, n_actions)
+        mac_out, twin_mac_out = self.mac.train_forward_sequence(
+            batch, context_indices
+        )
 
         # Calculate argmax_{z}q^{i}(\tau^{i},z,a^{i}), and make mac_out to approximate it
         # (bs*max_seq_length*n_agents, slot_number, slot_number)
-        indices = th.eye(self.args.slot_number, device=self.args.device).unsqueeze(dim=0).expand(batch.batch_size * batch.max_seq_length * self.args.n_agents, -1, -1)
-        indices = indices.reshape(batch.batch_size, batch.max_seq_length, self.args.n_agents, self.args.slot_number, self.args.slot_number)
-        counterfactual_twin_mac_out = []
         self.mac.init_twin_counter_hidden(batch.batch_size)
-        for t in range(batch.max_seq_length):
-            counter_twin_agent_outs = self.mac.counter_forward(batch, indices[:, t], t=t)
-            counterfactual_twin_mac_out.append(counter_twin_agent_outs)
-        counterfactual_twin_mac_out = th.stack(counterfactual_twin_mac_out, dim=1)      # (bs, max_seq_length, n_agents, slot_number, n_actions)
+        # This is a detached KL teacher. The selected-context twin above still
+        # receives TD gradients, so a second graph here only wastes memory.
+        with th.no_grad():
+            counterfactual_twin_mac_out = self.mac.counterfactual_sequence(batch)
+        # (bs, max_seq_length, n_agents, slot_number, n_actions)
         counterfactual_twin_mac_out = counterfactual_twin_mac_out[:, :-1].permute(0, 1, 2, 4, 3)    # (bs, max_seq_length-1, n_agents, n_actions, slot_number)
         if belief_outputs is not None:
             teacher_context_q, teacher_diagnostics = self.mac.aggregate_context_q(
@@ -192,18 +185,20 @@ class DualEpisodeREEQLearner:
         chosen_twin_action_qvals = th.gather(twin_mac_out[:, :-1], dim=3, index=actions).squeeze(3)
 
         # Calculate the Q-Values necessary for the target
-        target_mac_out = []
-        target_twin_mac_out = []
         self.target_mac.init_hidden(batch.batch_size)
         self.target_mac.init_twin_hidden(batch.batch_size)
-        for t in range(batch.max_seq_length):
-            target_agent_outs, target_twin_agent_outs = self.target_mac.train_forward(batch, context_indices[:, t].detach(), t=t)
-            target_mac_out.append(target_agent_outs)
-            target_twin_mac_out.append(target_twin_agent_outs)
+        # Target networks are never optimized. Avoiding their autograd graph is
+        # important for 500-step Entity-GRU episodes.
+        with th.no_grad():
+            target_mac_out, target_twin_mac_out = (
+                self.target_mac.train_forward_sequence(
+                    batch, context_indices.detach()
+                )
+            )
 
-        # We don't need the first timesteps Q-Value estimate for calculating targets
-        target_mac_out = th.stack(target_mac_out[1:], dim=1)  # Concat across time
-        target_twin_mac_out = th.stack(target_twin_mac_out[1:], dim=1)
+        # We don't need the first timestep's Q-value for TD targets.
+        target_mac_out = target_mac_out[:, 1:]
+        target_twin_mac_out = target_twin_mac_out[:, 1:]
 
         # Mask out unavailable actions
         target_mac_out[avail_actions[:, 1:] == 0] = -9999999  # From OG deepmarl

@@ -1,0 +1,5 @@
+# Larger camera team on the standard 8-target/9-obstacle layout.
+extends: mate_ippo
+
+env_args:
+  mate_config: MATE-8v8-9.yaml

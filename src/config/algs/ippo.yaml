@@ -1,0 +1,43 @@
+# --- Independent Proximal Policy Optimization ---
+
+# Decentralized shared policy with stochastic categorical exploration.
+action_selector: "multinomial"
+agent_output_type: "pi_logits"
+mask_before_softmax: true
+epsilon_start: 0.0
+epsilon_finish: 0.0
+epsilon_anneal_time: 1
+
+mac: "basic_mac"
+learner: "ippo_learner"
+on_policy: true
+mixer:
+
+# Parallel complete-episode rollouts. The on-policy path trains directly on
+# this batch and never samples stale episodes from the replay buffer.
+runner: "parallel"
+batch_size_run: 4
+batch_size: 4
+buffer_size: 4
+training_iters: 1
+
+gamma: 0.99
+gae_lambda: 1.0
+lr: 0.0005
+critic_lr: 0.0005
+ppo_adam_eps: 0.00001
+ppo_epochs: 16
+ppo_clip_param: 0.3
+ppo_value_clip: 10000.0
+ppo_value_loss_coefficient: 1.0
+ppo_entropy_coefficient: 0.05
+ppo_entropy_schedule:
+  - [0, 0.05]
+  - [2000000, 0.05]
+  - [4000000, 0.01]
+  - [10000000, 0.0]
+ppo_target_kl: 0.0
+ppo_grad_norm_clip: 10.0
+
+device: 0
+name: "ippo"

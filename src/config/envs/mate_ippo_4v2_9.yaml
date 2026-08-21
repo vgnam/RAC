@@ -1,0 +1,5 @@
+# Easier target-sparse MATE camera scenario.
+extends: mate_ippo
+
+env_args:
+  mate_config: MATE-4v2-9.yaml
