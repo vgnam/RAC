@@ -1,0 +1,21 @@
+# Belief-RAC preset for the shared Predator-Prey benchmark.
+extends: belief_dual_iql_ree
+
+# Match IQL and RAC wherever the algorithms permit it.
+lr: 0.0005
+batch_size: 32
+buffer_size: 5000
+training_iters: 1
+target_update_interval: 200
+gamma: 0.99
+n_step: 1
+
+epsilon_start: 1.0
+epsilon_finish: 0.05
+epsilon_anneal_time: 50000
+
+slot_number: 4
+kl_weight: 10.0
+
+wandb_group: "pred-prey-main"
+wandb_tags: ["predator-prey", "belief-rac"]

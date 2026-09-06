@@ -36,6 +36,37 @@ Also you can select the training algorithm by setting ```--config='dual_iql_ree'
 
 Here ```dual_iql_ree``` refers to ```RAC``` in the submitted paper.
 
+### Predator-Prey baselines
+
+Use the same `pred_prey_punish` task with the algorithm-specific presets below.
+The IQL, RAC, and Belief-RAC presets share the same learning rate, replay batch,
+buffer, target-update interval, epsilon schedule, discount, and one-step target.
+IPPO uses the same environment and evaluation budget but retains its required
+on-policy parallel-rollout and PPO update schedule.
+
+```bash
+# IQL
+python src/main.py --env-config pred_prey_punish --config pred_prey_iql
+
+# RAC
+python src/main.py --env-config pred_prey_punish --config pred_prey_rac
+
+# Belief-RAC
+python src/main.py --env-config pred_prey_punish --config pred_prey_belief_rac
+
+# IPPO
+python src/main.py --env-config pred_prey_punish --config pred_prey_ippo
+```
+
+All four presets inherit `t_max: 1000000`, `test_interval: 5000`, and
+`test_nepisode: 32` from `pred_prey_punish.yaml`. Override the budget with
+`--max-steps`, and run multiple seeds with Sacred overrides, for example:
+
+```bash
+python src/main.py --env-config pred_prey_punish --config pred_prey_rac \
+  --max-steps 1000000 with seed=0 use_wandb=True
+```
+
 `belief_dual_iql_ree` is the uncertainty-aware extension. It causally infers a
 categorical belief over local dynamics contexts from the current observation and
 the previous action/reward. Action values combine posterior plausibility with

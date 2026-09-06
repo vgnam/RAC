@@ -144,10 +144,26 @@ if __name__ == '__main__':
             'mate_ippo_8v8_9',
             'mate_entity_gru',
             'mate_belief_entity_gru',
+            'mate_belief_entity_gru_4v2_9',
+            'mate_belief_entity_gru_4v8_0',
         ],
     )
-    parser.add_argument("--config", type=str, default='dual_iql_ree',
-                        choices=['dual_iql_ree', 'belief_dual_iql_ree', 'iql', 'ippo', 'hysteretic_q'])
+    parser.add_argument(
+        "--config",
+        type=str,
+        default='dual_iql_ree',
+        choices=[
+            'dual_iql_ree',
+            'belief_dual_iql_ree',
+            'iql',
+            'ippo',
+            'hysteretic_q',
+            'pred_prey_iql',
+            'pred_prey_rac',
+            'pred_prey_belief_rac',
+            'pred_prey_ippo',
+        ],
+    )
     parser.add_argument(
         "--max-steps",
         type=int,

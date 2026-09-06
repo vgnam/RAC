@@ -147,6 +147,28 @@ class MateEntityGRUAgentTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unexpected MATE camera observation"):
             MateEntityGRUAgent(126 + 25, args)
 
+    def test_obstacle_free_layout_uses_empty_obstacle_summary(self):
+        args = make_args()
+        args.obs_shape = 90
+        args.mate_num_obstacles = 0
+        agent = MateEntityGRUAgent(90 + 25, args).eval()
+
+        observation = th.randn(2, 90)
+        observation[:, 0:3] = th.tensor([4.0, 8.0, 0.0])
+        observation[:, 3] = th.arange(2)
+        observation[:, 22 + 4 : 62 : 5] = 0.0
+        observation[:, 62 + 6 : 90 : 7] = 0.0
+        inputs = th.cat([observation, th.zeros(2, 25)], dim=-1)
+
+        parsed = agent._parse_observation(observation)
+        q_values, hidden = agent(inputs, th.zeros(2, 256))
+
+        self.assertEqual(parsed[3].shape, (2, 0, agent.OBSTACLE_DIM))
+        self.assertEqual(parsed[4].shape, (2, 0))
+        self.assertEqual(q_values.shape, (2, 25))
+        self.assertEqual(hidden.shape, (2, 256))
+        self.assertTrue(th.isfinite(q_values).all())
+
     def test_twin_sequence_matches_step_by_step_recurrence(self):
         twin = MateEntityGRUTwinAgent(151, self.args).eval()
         batch_size, time_steps, n_agents = 2, 4, 4

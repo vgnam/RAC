@@ -37,6 +37,12 @@ class MaskAwareEntityAttention(nn.Module):
         batch_size, entity_count, _ = entities.shape
         visible = visible.bool()
 
+        # Obstacle-free MATE scenarios legitimately supply an empty entity
+        # set.  Softmax has no valid reduction dimension in that case, so use
+        # the same learned representation as an all-hidden entity set.
+        if entity_count == 0:
+            return self.empty_summary.unsqueeze(0).expand(batch_size, -1)
+
         query = self.query(camera).view(batch_size, self.n_heads, self.head_dim)
         keys = self.key(entities).view(
             batch_size, entity_count, self.n_heads, self.head_dim
@@ -203,6 +209,7 @@ class MateEntityGRUAgent(nn.Module):
         return th.where(has_previous_action, indices, no_previous_action)
 
     def _parse_observation(self, observation):
+        batch_size = observation.shape[0]
         offset = 0
         preserved = observation[:, offset : offset + self.PRESERVED_DIM]
         offset += self.PRESERVED_DIM
@@ -211,17 +218,17 @@ class MateEntityGRUAgent(nn.Module):
 
         targets = observation[
             :, offset : offset + self.n_targets * (self.TARGET_DIM + 1)
-        ].reshape(-1, self.n_targets, self.TARGET_DIM + 1)
+        ].reshape(batch_size, self.n_targets, self.TARGET_DIM + 1)
         offset += self.n_targets * (self.TARGET_DIM + 1)
 
         obstacles = observation[
             :, offset : offset + self.n_obstacles * (self.OBSTACLE_DIM + 1)
-        ].reshape(-1, self.n_obstacles, self.OBSTACLE_DIM + 1)
+        ].reshape(batch_size, self.n_obstacles, self.OBSTACLE_DIM + 1)
         offset += self.n_obstacles * (self.OBSTACLE_DIM + 1)
 
         teammates = observation[
             :, offset : offset + self.n_cameras * (self.TEAMMATE_CAMERA_DIM + 1)
-        ].reshape(-1, self.n_cameras, self.TEAMMATE_CAMERA_DIM + 1)
+        ].reshape(batch_size, self.n_cameras, self.TEAMMATE_CAMERA_DIM + 1)
 
         target_visible = targets[..., -1] > 0.5
         obstacle_visible = obstacles[..., -1] > 0.5
