@@ -269,6 +269,8 @@ def run_sequential(args, logger):
                 if not bool(getattr(args, "on_policy", False)):
                     buffer.insert_episode_batch(episode_batch)
                 # print('cur_buffer_size:', buffer.episodes_in_buffer)
+            if hasattr(learner, "observe_episode"):
+                learner.observe_episode(episode_batch, runner.t_env)
         else:
             episode_batch = runner.run(test_mode=False)
             buffer.insert_episode_batch(episode_batch)

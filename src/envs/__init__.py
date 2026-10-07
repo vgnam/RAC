@@ -19,11 +19,15 @@ from .matrix_game.matrix_game_penalty import Matrix_Game_Penalty_Env
 from .matrix_game.matrix_game_partially_stochastic import Matrix_Game_Partially_Stochastic_Env
 from .matrix_game.matrix_game_fully_stochastic import Matrix_Game_Fully_Stochastic_Env
 from .matrix_game.matrix_game_gaussian import Matrix_Game_Gaussian_Env
+from .tremble_wrapper import TrembleWrapper
 
 
 # TODO: Do we need this?
 def env_fn(env, **kwargs) -> MultiAgentEnv: # TODO: this may be a more complex function
     # env_args = kwargs.get("env_args", {})
+    if "tremble_eps" in kwargs:
+        tremble_eps = kwargs.pop("tremble_eps")
+        return TrembleWrapper(env(**kwargs), tremble_eps, seed=kwargs.get("seed"))
     return env(**kwargs)
 
 

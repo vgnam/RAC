@@ -58,6 +58,11 @@ class DualEpisodeREEQLearner:
             # For matrix game, possible return contains -12, 0, 6, 8
             self.possible_returns = [-12, 0, 6, 8]
 
+        if 'matrix_game_climbing' in args.env:
+            assert self.args.slot_number == 6, "Should set slot_number to 6 for matrix_game_climbing."
+            # One context per possible return of the climbing game
+            self.possible_returns = [-30, 0, 5, 6, 7, 11]
+
         if 'stag_hunt' in args.env:
             # For pp, we consider continuous return within [-100, 50], divide into [slot_number] slots?
             # slot_number intervals, slot_number+1 points
@@ -102,7 +107,7 @@ class DualEpisodeREEQLearner:
         returns_expand = returns_expand.reshape(batch.batch_size, batch.max_seq_length, self.args.n_agents, 1).cpu().numpy()
 
         # ======================For matrix game, we should define index according to the return=========================
-        if "matrix_game_3" in self.args.env:
+        if "matrix_game_3" in self.args.env or "matrix_game_climbing" in self.args.env:
             return_index = np.searchsorted(self.possible_returns, returns_expand)  # shape=(bs, max_seq_length, n_agents, 1)
             return_indices = return_index.squeeze(axis=-1)      # (bs, max_seq_length, n_agents)
 

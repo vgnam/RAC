@@ -8,3 +8,6 @@ from .dual_ree_controller import DualREEMAC
 REGISTRY["basic_mac"] = BasicMAC
 REGISTRY["vf_mac"] = BasicVFMAC
 REGISTRY["dual_ree_mac"] = DualREEMAC
+
+from .tremble_block_controller import TrembleBlockMAC
+REGISTRY["tremble_block_mac"] = TrembleBlockMAC

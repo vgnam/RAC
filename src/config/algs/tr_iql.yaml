@@ -1,0 +1,30 @@
+# --- Tremble-Robust IQL ("Cach A"): BQL best-possible update in the trembled env ---
+# Same agent network, epsilon schedule and budget as iql / dual_iql_ree. Set the
+# execution tremble with env_args.tremble_eps (applies to training and testing).
+
+action_selector: "epsilon_greedy"
+epsilon_start: 1.0
+epsilon_finish: 0.05
+epsilon_anneal_time: 50000
+
+runner: "episode"
+batch_size_run: 1
+
+buffer_size: 5000
+target_update_interval: 200
+
+agent_output_type: "q"
+mac: "tremble_block_mac"
+learner: "tremble_iql_learner"
+mixer: # Mixer becomes None
+
+block_len: 200  # episodes per commitment block
+fit_iters: 100  # full-batch regression steps per network at each block end
+fit_lr: 0.01
+estimator: "pooled"  # "pooled" (variance-aware group pooling) or "double"
+pool_z: 3.0  # z-score above which a block replaces the stored best group
+init_log_var: 9.2  # initial log variance of Q (exp(9.2) ~ 1e4: first block is adopted)
+
+device: 0
+
+name: "tr_iql"
