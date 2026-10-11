@@ -20,6 +20,7 @@ from .matrix_game.matrix_game_partially_stochastic import Matrix_Game_Partially_
 from .matrix_game.matrix_game_fully_stochastic import Matrix_Game_Fully_Stochastic_Env
 from .matrix_game.matrix_game_gaussian import Matrix_Game_Gaussian_Env
 from .tremble_wrapper import TrembleWrapper
+from .lbf_env import LBFEnv
 
 
 # TODO: Do we need this?
@@ -27,7 +28,8 @@ def env_fn(env, **kwargs) -> MultiAgentEnv: # TODO: this may be a more complex f
     # env_args = kwargs.get("env_args", {})
     if "tremble_eps" in kwargs:
         tremble_eps = kwargs.pop("tremble_eps")
-        return TrembleWrapper(env(**kwargs), tremble_eps, seed=kwargs.get("seed"))
+        eval_eps = kwargs.pop("tremble_eps_eval", None)
+        return TrembleWrapper(env(**kwargs), tremble_eps, seed=kwargs.get("seed"), eval_eps=eval_eps)
     return env(**kwargs)
 
 
@@ -47,6 +49,7 @@ REGISTRY["matrix_game_penalty"] = partial(env_fn, env=Matrix_Game_Penalty_Env)
 REGISTRY["matrix_game_partially_stochastic"] = partial(env_fn, env=Matrix_Game_Partially_Stochastic_Env)
 REGISTRY["matrix_game_fully_stochastic"] = partial(env_fn, env=Matrix_Game_Fully_Stochastic_Env)
 REGISTRY["matrix_game_gaussian"] = partial(env_fn, env=Matrix_Game_Gaussian_Env)
+REGISTRY["lbf"] = partial(env_fn, env=LBFEnv)
 
 # REGISTRY["find_goals"] = partial(env_fn, env=MAFindGoals)
 # REGISTRY["find_treasure"] = partial(env_fn, env=MAFindTreasure)

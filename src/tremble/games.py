@@ -103,6 +103,29 @@ def noisy_payoff(game, eps):
     return table
 
 
+def noisy_std(game, eps):
+    """Std of the reward of each intended joint action under K_eps (tremble + reward noise)."""
+    second = MatrixGame(game.name, game.outcomes ** 2)
+    return np.sqrt(np.maximum(noisy_payoff(second, eps) - noisy_payoff(game, eps) ** 2, 0.0))
+
+
+def chi2_kappa(eps, eps_max, n_agents):
+    """Radius kappa such that r_eps'(a) >= r_eps(a) - kappa * std_eps(a) for every
+    intended joint a and every tremble rate eps' in [eps, eps_max].
+
+    Per agent chi^2(K_eps' || K_eps) = (1-eps')^2/(1-eps) + eps'^2/eps - 1 for every
+    intention (A cancels) and grows with eps' > eps; agents tremble independently, so
+    1 + chi^2 multiplies over agents. Cauchy-Schwarz gives
+    E_Q[r] >= E_P[r] - sqrt(chi^2(Q||P) Var_P[r]), i.e. mean - kappa * std is the value
+    of the chi^2-ball distributionally robust problem (variance regularisation)."""
+    if eps_max <= eps:
+        return 0.0
+    if eps <= 0:
+        raise ValueError("eps must be > 0: K_eps' is not absolutely continuous w.r.t. K_0")
+    c = (1 - eps_max) ** 2 / (1 - eps) + eps_max ** 2 / eps - 1
+    return float(np.sqrt((1 + c) ** n_agents - 1))
+
+
 def individual_optimum(table):
     """Q_i(a_i) = max over teammates' intentions, for every agent: (n, A)."""
     n = table.ndim

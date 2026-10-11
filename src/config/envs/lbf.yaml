@@ -1,0 +1,16 @@
+# Level-Based Foraging, cooperative 8x8 map: every food item needs both agents.
+env: lbf
+
+env_args:
+  key: "Foraging-8x8-2p-2f-coop-v3"
+  time_limit: 50
+  tremble_eps: 0.0
+  tremble_eps_eval: null  # also log intended value/optimality at this tremble rate
+
+t_max: 200000
+test_interval: 10000
+test_nepisode: 32
+test_greedy: True
+log_interval: 10000
+runner_log_interval: 10000
+learner_log_interval: 10000

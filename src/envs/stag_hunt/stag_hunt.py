@@ -1,10 +1,14 @@
 # From https://github.com/wendelinboehmer/dcg/blob/master/src/envs/stag_hunt.py
-from src.envs.multiagentenv import MultiAgentEnv
+from ..multiagentenv import MultiAgentEnv
 import torch as th
 import numpy as np
 import random
 import pygame
-from src.utils.dict2namedtuple import convert
+# Older PyMARL runners import this package as top-level ``envs``.
+if __package__.startswith("envs."):
+    from src.utils.dict2namedtuple import convert
+else:
+    from ...utils.dict2namedtuple import convert
 
 '''
 A simple n*m grid-world game for N agents trying to capture M prey and M' hares. 

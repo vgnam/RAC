@@ -9,8 +9,12 @@ if not hasattr(np, "bool8"):
 
 import mate
 
-from src.envs.multiagentenv import MultiAgentEnv
-from src.utils.dict2namedtuple import convert
+from ..multiagentenv import MultiAgentEnv
+# Older PyMARL runners import this package as top-level ``envs``.
+if __package__.startswith("envs."):
+    from src.utils.dict2namedtuple import convert
+else:
+    from ...utils.dict2namedtuple import convert
 
 _TARGET_AGENTS = {
     "greedy": mate.GreedyTargetAgent,

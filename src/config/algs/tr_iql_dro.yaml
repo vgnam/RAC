@@ -1,0 +1,9 @@
+# TR-IQL-DRO: tremble-rate robust TR-IQL. Block scores are mean - kappa * std with
+# kappa derived from (env_args.tremble_eps, dro_eps_max), see src/tremble/games.py:chi2_kappa.
+# Set env_args.tremble_eps_eval to log the greedy joint's value under the shifted rate.
+extends: tr_iql
+
+estimator: "pooled"
+dro_eps_max: 0.2
+
+name: "tr_iql_dro"

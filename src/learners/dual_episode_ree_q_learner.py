@@ -58,15 +58,32 @@ class DualEpisodeREEQLearner:
             # For matrix game, possible return contains -12, 0, 6, 8
             self.possible_returns = [-12, 0, 6, 8]
 
+        if 'matrix_game_1' in args.env:
+            assert self.args.slot_number == 3, "Should set slot_number to 3 for matrix_game_1."
+            self.possible_returns = [0, 10, 10.4]
+
+        if 'matrix_game_2' in args.env:
+            assert self.args.slot_number == 3, "Should set slot_number to 3 for matrix_game_2."
+            self.possible_returns = [-12, 0, 8]
+
         if 'matrix_game_climbing' in args.env:
             assert self.args.slot_number == 6, "Should set slot_number to 6 for matrix_game_climbing."
             # One context per possible return of the climbing game
             self.possible_returns = [-30, 0, 5, 6, 7, 11]
 
+        if 'matrix_game_penalty' in args.env:
+            assert self.args.slot_number == 4, "Should set slot_number to 4 for matrix_game_penalty."
+            # One context per possible return of the penalty game (k = -15)
+            self.possible_returns = [-15, 0, 2, 10]
+
         if 'stag_hunt' in args.env:
             # For pp, we consider continuous return within [-100, 50], divide into [slot_number] slots?
             # slot_number intervals, slot_number+1 points
             self.possible_returns = np.linspace(-200, 50, num=args.slot_number + 1)
+
+        if 'lbf' in args.env:
+            # LBF team return lies in [0, 1] (1 = all food collected)
+            self.possible_returns = np.linspace(0.0, 1.0, num=args.slot_number + 1)
 
         if 'sc2' in args.env:
             # For SMAC and SMACv2, we consider continuous returns within [?, ?] ?
@@ -107,14 +124,16 @@ class DualEpisodeREEQLearner:
         returns_expand = returns_expand.reshape(batch.batch_size, batch.max_seq_length, self.args.n_agents, 1).cpu().numpy()
 
         # ======================For matrix game, we should define index according to the return=========================
-        if "matrix_game_3" in self.args.env or "matrix_game_climbing" in self.args.env:
+        if any(name in self.args.env for name in
+               ("matrix_game_1", "matrix_game_2", "matrix_game_3", "matrix_game_climbing",
+                "matrix_game_penalty")):
             return_index = np.searchsorted(self.possible_returns, returns_expand)  # shape=(bs, max_seq_length, n_agents, 1)
             return_indices = return_index.squeeze(axis=-1)      # (bs, max_seq_length, n_agents)
 
             onehot_return_indices = np.eye(self.args.slot_number, dtype=np.int32)[return_indices]  # (bs, max_seq_length, n_agents, slot_number)
             onehot_return_indices = th.from_numpy(onehot_return_indices).to(device=self.args.device, dtype=th.float32)
 
-        elif "stag_hunt" in self.args.env or "sc2" in self.args.env or "mate" in self.args.env:
+        elif any(name in self.args.env for name in ("stag_hunt", "sc2", "mate", "lbf")):
             returns_expand_flat = returns_expand.reshape(-1)    # (bs*max_seq_length*n_agents)
             return_index = np.digitize(returns_expand_flat, bins=self.possible_returns, right=False) - 1
             return_index = np.clip(return_index, 0, self.args.slot_number - 1)

@@ -4,16 +4,23 @@ import torch as th
 from torch.optim import Adam
 
 from src.components.episode_buffer import ReplayBuffer
+from src.tremble.games import chi2_kappa
 
 
 class TrembleIQLLearner:
-    """Tremble-Robust IQL, "Cach A": BQL's best-possible update in the trembled env.
+    """Tremble-Robust IQL: optimistic over teammates' intentions, nominal or robust
+    over execution tremble.
 
     Q (the acting network, ``mac.agent``) is indexed by intended actions. Within a
     block (see ``TrembleBlockMAC``) teammates' intentions are fixed, so regressing
     Q^e on the block's TD targets estimates the expectation over execution tremble.
     At the end of the block Q(s, a_i) <- max(Q(s, a_i), Q^e(s, a_i)), which over
-    blocks approaches max over teammates' intentions. Maximising noisy block means is
+    blocks approaches max over teammates' intentions.
+
+    ``dro_eps_max`` (pooled only) scores each block by mean - kappa * std with
+    kappa = chi2_kappa(tremble_eps, dro_eps_max, n_agents), a lower bound on its value
+    under any tremble rate in [tremble_eps, dro_eps_max] (exact for matrix games; for
+    multi-step games it is applied per step). Maximising noisy block means is
     biased upwards, most for high-variance (risky) intentions, so two estimators are
     available (``estimator``):
 
@@ -43,6 +50,11 @@ class TrembleIQLLearner:
         self.qe_opt = Adam(self.qe_agent.parameters(), lr=args.fit_lr)
         self.sel_opt = Adam(self.sel_agent.parameters(), lr=args.fit_lr)
         self.estimator = getattr(args, "estimator", "pooled")
+        eps_max = getattr(args, "dro_eps_max", None)
+        self.kappa = 0.0 if eps_max is None else chi2_kappa(
+            args.env_args.get("tremble_eps", 0.0), eps_max, self.n_agents)
+        if self.kappa and self.estimator != "pooled":
+            raise ValueError("dro_eps_max requires estimator: pooled")
         if self.estimator == "pooled":
             # S outputs log variance; start very uncertain so a first block is adopted as is.
             with th.no_grad():
@@ -132,6 +144,8 @@ class TrembleIQLLearner:
             sigma2 = sq_res.sum(dim=(0, 1)) / (count - 1).clamp(min=1)
             v_group = (sigma2 / count.clamp(min=1)).clamp(min=1e-4)
             v = (chosen * v_group).sum(dim=3).clamp(min=1e-4)  # per-sample block variance of m
+            if self.kappa:
+                m = m - self.kappa * (chosen * sigma2.sqrt()).sum(dim=3)  # chi^2-DRO block score
 
             log_var_all = self._unroll(self.sel_agent, block)[:, :-1]
             var_old = th.gather(log_var_all, 3, actions).squeeze(3).exp()
@@ -149,7 +163,8 @@ class TrembleIQLLearner:
             sel_target[onehot] = var_new.log().unsqueeze(3).expand_as(onehot)[onehot]
         n = mask.sum().item()
         stats = {"block_replace_frac": ((replace & (mask > 0)).float().sum().item() / n),
-                 "block_merge_frac": ((merge & (mask > 0)).float().sum().item() / n)}
+                 "block_merge_frac": ((merge & (mask > 0)).float().sum().item() / n),
+                 "dro_kappa": self.kappa}
         return q_target, sel_target, stats
 
     def _double_targets(self, block, targets, actions, mask, q_old):

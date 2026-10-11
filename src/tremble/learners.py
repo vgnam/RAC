@@ -4,8 +4,9 @@ Every learner returns Q of shape (n_agents, n_actions) indexed by the agent's
 *intended* action, plus the greedy joint intention. Agents never observe
 teammates' actions.
 
-Tremble-Robust IQL ("Cach A" of the proposal): BQL's best-possible machinery run
-inside the trembled environment. Training is split into blocks that all agents
+Tremble-Robust IQL ("Cach A" of the proposal): optimistic (max) over teammates'
+intentions, nominal (mean) or robust (mean - kappa * std) over execution tremble.
+Training is split into blocks that all agents
 know (a shared clock, no shared information). In each block every agent commits
 to one intended action, so teammates' intentions are fixed and only execution
 trembles. The block mean therefore estimates r_eps(a_i, a_-i); taking the max
@@ -28,9 +29,13 @@ def greedy_joint(q, rng):
 
 
 def tremble_robust_iql(game, eps, rng, n_blocks, block_len, executed_keys=False,
-                       estimator="double"):
+                       estimator="double", kappa=0.0):
     """Proposed method. ``eps=0`` is BQL; ``executed_keys`` is the ablation that
-    keys Q by the executed action and averages over the own tremble afterwards."""
+    keys Q by the executed action and averages over the own tremble afterwards.
+    ``kappa > 0`` scores each block by mean - kappa * std (chi^2-ball DRO, see
+    ``games.chi2_kappa``), which lower-bounds its value under any tremble rate up to the
+    eps_max that kappa was derived from."""
+    score = (lambda r: r.mean() - kappa * r.std()) if kappa else (lambda r: r.mean())
     n, A = game.n_agents, game.n_actions
     sel = np.full((n, A), -np.inf)
     q = np.full((n, A), -np.inf)
@@ -53,9 +58,9 @@ def tremble_robust_iql(game, eps, rng, n_blocks, block_len, executed_keys=False,
                 else:
                     r_a, r_b = rewards[:half], rewards[half:]
                 if estimator == "double":
-                    m_sel, m_val = r_a.mean(), r_b.mean()
+                    m_sel, m_val = score(r_a), score(r_b)
                 else:
-                    m_sel = m_val = np.concatenate([r_a, r_b]).mean()
+                    m_sel = m_val = score(np.concatenate([r_a, r_b]))
                 if m_sel > sel[i, a]:
                     sel[i, a] = m_sel
                     q[i, a] = m_val
@@ -71,6 +76,8 @@ def tremble_robust_iql_stats(game, eps, rng, n_blocks, block_len, mode="pooled",
 
     ``lcb``: score each block by mean - kappa * standard error and keep the max, which
     penalises high-variance (risky) intentions whose noisy maxima are inflated most.
+    This is a statistical bound that vanishes as block_len grows; robustness to the
+    tremble rate itself uses the reward std instead (``tremble_robust_iql(kappa=...)``).
     ``pooled``: keep, per own intention, the best group as (mean, var, n). A new block
     replaces it when significantly higher (z-test), is merged into it when not
     significantly different, and is ignored when significantly lower. ``rank_kappa``

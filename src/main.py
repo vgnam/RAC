@@ -135,8 +135,12 @@ if __name__ == '__main__':
         default='matrix_game_3',
         choices=[
             'matrix_game_3',
+            'matrix_game_1',
+            'matrix_game_2',
+            'matrix_game_3_tremble',
             'matrix_game_climbing',
             'matrix_game_penalty',
+            'lbf',
             'pred_prey_punish',
             'sc2',
             'mate',
@@ -165,6 +169,8 @@ if __name__ == '__main__':
             'pred_prey_belief_rac',
             'pred_prey_ippo',
             'tr_iql',
+            'tr_iql_lbf',
+            'tr_iql_dro',
         ],
     )
     parser.add_argument(

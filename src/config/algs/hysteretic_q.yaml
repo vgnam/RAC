@@ -24,6 +24,7 @@ mixer: # Mixer becomes None
 
 beta: 0.7
 
-device: 6
+# Local training machine exposes its primary GPU as cuda:0.
+device: 0
 
 name: "hysteretic_q"

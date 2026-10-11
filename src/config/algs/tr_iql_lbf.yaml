@@ -1,0 +1,7 @@
+# Tremble-Robust IQL for multi-step games (LBF): explore with a committed random
+# deterministic policy per block, and shorter blocks so a 200k-step budget still
+# gives ~200 blocks.
+extends: tr_iql
+
+explore_policy: "random_linear"
+block_len: 20  # episodes per commitment block (50 steps each)

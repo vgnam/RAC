@@ -4,6 +4,7 @@ env_args:
   n_agents: 2
   n_actions: 3
   tremble_eps: 0.0
+  tremble_eps_eval: null  # also log intended value/optimality at this tremble rate
   episode_limit: 1
   obs_last_action: False
   state_last_action: False

@@ -21,6 +21,19 @@ pip install git+https://github.com/XuehaiPan/mate.git#egg=mate
 
 ## Training
 
+To run the linked DM2 implementation on this repository's **MATE** and
+**Predator-Prey** backends, see [DM2 integration](docs/DM2.md):
+
+```powershell
+py -3.10 run_dm2.py --env-config mate --max-steps 1000000
+py -3.10 run_dm2.py --env-config pred_prey_punish --max-steps 1000000
+```
+
+These commands default to DM2 with self-imitation learning (no expert dataset).
+
+For Tremble-Robust IQL (`--config=tr_iql`) and the tabular tremble benchmark,
+see [TR-IQL](docs/TR_IQL.md).
+
 Sacred capture mode is selected automatically (`fd` on Linux/Kaggle and `sys`
 on Windows).
 
