@@ -20,7 +20,6 @@ from .matrix_game.matrix_game_partially_stochastic import Matrix_Game_Partially_
 from .matrix_game.matrix_game_fully_stochastic import Matrix_Game_Fully_Stochastic_Env
 from .matrix_game.matrix_game_gaussian import Matrix_Game_Gaussian_Env
 from .tremble_wrapper import TrembleWrapper
-from .lbf_env import LBFEnv
 
 
 # TODO: Do we need this?
@@ -49,7 +48,15 @@ REGISTRY["matrix_game_penalty"] = partial(env_fn, env=Matrix_Game_Penalty_Env)
 REGISTRY["matrix_game_partially_stochastic"] = partial(env_fn, env=Matrix_Game_Partially_Stochastic_Env)
 REGISTRY["matrix_game_fully_stochastic"] = partial(env_fn, env=Matrix_Game_Fully_Stochastic_Env)
 REGISTRY["matrix_game_gaussian"] = partial(env_fn, env=Matrix_Game_Gaussian_Env)
-REGISTRY["lbf"] = partial(env_fn, env=LBFEnv)
+
+
+def _lbf_env(**kwargs):
+    # Imported lazily: lbforaging/gymnasium are only needed for LBF runs.
+    from .lbf_env import LBFEnv
+    return LBFEnv(**kwargs)
+
+
+REGISTRY["lbf"] = partial(env_fn, env=_lbf_env)
 
 # REGISTRY["find_goals"] = partial(env_fn, env=MAFindGoals)
 # REGISTRY["find_treasure"] = partial(env_fn, env=MAFindTreasure)
