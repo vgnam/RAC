@@ -32,6 +32,23 @@ class TrembleBlockLearner:
     In single-state matrix games the block test is the per-action test of
     ``TrembleIQLLearner``; with ``block_beta`` > 0 Q is a weighted rather than an
     exact best-group average.
+
+    ``optimism`` (TR-IQL v3): block weighting alone cannot amplify rare coordinated
+    successes in multi-step games, so v3 adds per-state optimism towards teammates:
+    negative TD errors are weighted by ``beta_neg`` < 1 (hysteretic). The blocks then
+    bound that optimism by what joint intentions actually achieve under tremble:
+
+    * "hysteretic": fixed ``beta_neg = hyst_beta_init`` (ablation, no calibration).
+    * "calibrated": after each block, the optimistic value of the greedy policy at
+      the episode start, V_opt = mean max_a Q(s_0, a), is compared with the ceiling
+      C = best-group mean + ``calib_kappa`` * its standard error + a bonus that
+      decays linearly from ``calib_bonus`` to 0 over ``calib_bonus_anneal`` steps
+      (so optimism can lead before coordination is first achieved). V_opt > C raises
+      ``beta_neg`` (less optimism: Q must account for tremble), V_opt < C lowers it,
+      by a factor exp(``calib_lr``), within [``hyst_beta_min``, 1].
+
+    With ``block_discounted`` the block statistics use discounted returns, matching
+    the scale of Q.
     """
 
     def __init__(self, mac, scheme, logger, args):
@@ -47,6 +64,12 @@ class TrembleBlockLearner:
         self.pool_z = float(args.pool_z)
         self.beta = float(args.block_beta)
         self.var_floor = float(args.block_var_floor)
+        self.discounted = bool(getattr(args, "block_discounted", False))
+        self.optimism = getattr(args, "optimism", "none")
+        assert self.optimism in ("none", "hysteretic", "calibrated"), self.optimism
+        self.beta_neg = float(getattr(args, "hyst_beta_init", 1.0)) if self.optimism != "none" else 1.0
+        self.v_opt = 0.0
+        self.ceiling = 0.0
 
         self.buffer = None
         self.slot_block = None   # block id of each replay slot, -1 while its block is unfinished
@@ -76,7 +99,10 @@ class TrembleBlockLearner:
         self.slot_block[slot] = -1
         self.slot_weight[slot] = 0.0
         self.block_slots.append(slot)
-        self.block_returns.append(episode_batch["reward"].sum().item())
+        rewards = episode_batch["reward"][0, :, 0]
+        if self.discounted:
+            rewards = rewards * self.args.gamma ** th.arange(len(rewards), device=rewards.device, dtype=rewards.dtype)
+        self.block_returns.append(rewards.sum().item())
         if len(self.block_returns) >= self.block_len:
             self._end_block(t_env)
 
@@ -99,6 +125,9 @@ class TrembleBlockLearner:
         self.decisions[decision] += 1
         self.last_block_mean = m
 
+        if self.optimism == "calibrated":
+            self._calibrate(t_env)
+
         block_id = self.n_blocks
         self.block_stats[block_id] = (m, v)
         self.slot_block[self.block_slots] = block_id
@@ -106,6 +135,26 @@ class TrembleBlockLearner:
         self.block_returns, self.block_slots = [], []
         self._refresh_weights()
         self.mac.new_block(t_env)
+
+    def _calibrate(self, t_env):
+        """Move beta_neg so the optimistic start value tracks what blocks achieve."""
+        batch = self.buffer[np.asarray(self.block_slots)][:, :1]
+        if batch.device != self.args.device:
+            batch.to(self.args.device)
+        with th.no_grad():
+            q0 = unroll_agent(self.mac, self.mac.agent, batch, self.n_agents)[:, 0]
+            q0[batch["avail_actions"][:, 0] == 0] = -9999999
+            v_opt = q0.max(dim=2)[0].mean().item()
+        self._update_beta(v_opt, t_env)
+
+    def _update_beta(self, v_opt, t_env):
+        self.v_opt = v_opt
+        mu, var = self.best
+        anneal = max(float(getattr(self.args, "calib_bonus_anneal", 1)), 1.0)
+        bonus = float(getattr(self.args, "calib_bonus", 0.0)) * max(0.0, 1.0 - t_env / anneal)
+        self.ceiling = mu + float(self.args.calib_kappa) * np.sqrt(var) + bonus
+        step = float(self.args.calib_lr) if self.v_opt > self.ceiling else -float(self.args.calib_lr)
+        self.beta_neg = float(np.clip(self.beta_neg * np.exp(step), float(self.args.hyst_beta_min), 1.0))
 
     def _refresh_weights(self):
         mu, var = self.best
@@ -154,7 +203,12 @@ class TrembleBlockLearner:
 
         mask = mask.expand_as(chosen)
         td_error = (chosen - targets) * mask
-        loss = (td_error ** 2).sum() / mask.sum()
+        if self.beta_neg < 1.0:
+            # Hysteretic: Q above its target (negative TD error, targets - chosen < 0) learns at beta_neg.
+            weight = th.where(td_error > 0, th.full_like(td_error, self.beta_neg), th.ones_like(td_error))
+            loss = (weight * td_error ** 2).sum() / mask.sum()
+        else:
+            loss = (td_error ** 2).sum() / mask.sum()
         self.optimiser.zero_grad()
         loss.backward()
         grad_norm = th.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
@@ -174,6 +228,11 @@ class TrembleBlockLearner:
             self.logger.log_stat("block_best_mean", self.best[0], t_env)
             self.logger.log_stat("block_best_se", float(np.sqrt(self.best[1])), t_env)
             self.logger.log_stat("block_last_mean", self.last_block_mean, t_env)
+            if self.optimism != "none":
+                self.logger.log_stat("beta_neg", self.beta_neg, t_env)
+            if self.optimism == "calibrated":
+                self.logger.log_stat("calib_v_opt", self.v_opt, t_env)
+                self.logger.log_stat("calib_ceiling", self.ceiling, t_env)
             n_decisions = max(sum(self.decisions.values()), 1)
             for key, count in self.decisions.items():
                 self.logger.log_stat("block_{}_frac".format(key), count / n_decisions, t_env)

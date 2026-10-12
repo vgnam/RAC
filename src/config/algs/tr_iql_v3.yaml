@@ -1,0 +1,18 @@
+# --- TR-IQL v3: per-state optimism towards teammates, calibrated by blocks ---
+# Negative TD errors are down-weighted by beta_neg (hysteretic), and beta_neg is
+# moved after every block so that the optimistic start value V_opt does not exceed
+# what the best group of blocks achieved under tremble (+ kappa SE + a decaying
+# bonus). See docs/TR_IQL.md.
+extends: tr_iql_v2
+
+optimism: "calibrated"  # none (v2) | hysteretic (fixed beta_neg) | calibrated
+block_discounted: True  # block statistics on discounted returns, the scale of Q
+block_beta: 1.0  # sample all finished blocks uniformly; optimism comes from beta_neg
+hyst_beta_init: 0.1
+hyst_beta_min: 0.01
+calib_kappa: 1.0  # ceiling = best-group mean + kappa * SE + bonus
+calib_lr: 0.1  # beta_neg *= exp(+-calib_lr) per block
+calib_bonus: 0.0  # initial optimism allowance above the ceiling (return units)
+calib_bonus_anneal: 1  # steps over which the bonus decays to 0
+
+name: "tr_iql_v3"

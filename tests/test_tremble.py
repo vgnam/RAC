@@ -131,3 +131,21 @@ def test_block_learner_unfinished_block_has_zero_weight():
     _feed_block(learner, buffer, [1.0, 1.0])                # half a block
     pending = learner.slot_block[:buffer.buffer_index] == -1
     assert pending.sum() == 2 and (learner.slot_weight[:buffer.buffer_index][pending] == 0).all()
+
+
+def test_block_learner_calibration_moves_beta_towards_ceiling():
+    learner, buffer = _block_learner(var_floor=1.0)
+    learner.args.calib_kappa, learner.args.calib_lr, learner.args.hyst_beta_min = 1.0, 0.5, 0.01
+    learner.args.calib_bonus, learner.args.calib_bonus_anneal = 0.0, 1
+    learner.beta_neg, learner.best = 0.1, (5.0, 1.0)            # ceiling = 5 + 1 = 6
+    learner._update_beta(v_opt=9.0, t_env=0)                     # over-optimistic: less optimism
+    assert learner.beta_neg > 0.1
+    raised = learner.beta_neg
+    learner._update_beta(v_opt=3.0, t_env=0)                     # under the ceiling: more optimism
+    assert learner.beta_neg < raised
+    for _ in range(50):
+        learner._update_beta(v_opt=100.0, t_env=0)
+    assert learner.beta_neg == 1.0                               # capped at plain (nominal) TD
+    learner.args.calib_bonus, learner.args.calib_bonus_anneal = 10.0, 100
+    learner._update_beta(v_opt=10.0, t_env=0)                    # the bonus lifts the ceiling to 16
+    assert learner.ceiling == 16.0 and learner.beta_neg < 1.0
