@@ -78,3 +78,56 @@ def test_tremble_learner_fused_unroll_matches_stepwise():
     stepwise = TrembleIQLLearner._unroll_stepwise(learner, agent, batch)
     assert fused.shape == (bs, T, n, n_actions)
     assert th.allclose(fused, stepwise, atol=1e-6)
+
+
+def _block_learner(block_len=4, pool_z=3.0, beta=0.1, var_floor=1e-4, buffer_size=64):
+    from types import SimpleNamespace
+
+    import torch as th
+
+    from src.learners.tremble_block_learner import TrembleBlockLearner
+
+    args = SimpleNamespace(n_agents=2, lr=1e-3, optim_alpha=0.99, optim_eps=1e-5, block_len=block_len,
+                           pool_z=pool_z, block_beta=beta, block_var_floor=var_floor, learner_log_interval=1)
+    agent = th.nn.Linear(3, 2)
+    mac = SimpleNamespace(agent=agent, parameters=agent.parameters, blocks=0)
+    mac.new_block = lambda t_env: setattr(mac, "blocks", mac.blocks + 1)
+    learner = TrembleBlockLearner(mac, None, None, args)
+    buffer = SimpleNamespace(buffer_size=buffer_size, buffer_index=0)
+    learner.set_buffer(buffer)
+    return learner, buffer
+
+
+def _feed_block(learner, buffer, returns):
+    import torch as th
+
+    for r in returns:
+        buffer.buffer_index = (buffer.buffer_index + 1) % buffer.buffer_size  # run.py inserts first
+        ep = type("Ep", (), {"batch_size": 1,
+                             "__getitem__": lambda self, k, r=r: th.tensor([[[float(r)], [0.0]]])})()
+        learner.observe_episode(ep, t_env=0)
+
+
+def test_block_learner_pools_blocks_by_mean_return():
+    learner, buffer = _block_learner()
+    _feed_block(learner, buffer, [0.0, 1.0, 0.0, 1.0])      # first block is adopted
+    assert learner.decisions["replace"] == 1 and learner.mac.blocks == 1
+    _feed_block(learner, buffer, [0.0, 1.0, 1.0, 0.0])      # same mean: merged
+    assert learner.decisions["merge"] == 1
+    assert learner.best[1] < learner.block_stats[0][1]      # pooled variance shrinks
+    _feed_block(learner, buffer, [-9.0, -10.0, -9.0, -10.0])  # clearly worse: ignored
+    assert learner.decisions["ignore"] == 1
+    w = learner.slot_weight
+    assert (w[learner.slot_block == 0] == 1.0).all() and (w[learner.slot_block == 2] == 0.1).all()
+    _feed_block(learner, buffer, [9.0, 10.0, 9.0, 10.0])    # clearly better: replaces, old blocks drop to beta
+    assert learner.decisions["replace"] == 2
+    assert (learner.slot_weight[learner.slot_block == 0] == 0.1).all()
+    assert (learner.slot_weight[learner.slot_block == 3] == 1.0).all()
+
+
+def test_block_learner_unfinished_block_has_zero_weight():
+    learner, buffer = _block_learner()
+    _feed_block(learner, buffer, [1.0] * 4)
+    _feed_block(learner, buffer, [1.0, 1.0])                # half a block
+    pending = learner.slot_block[:buffer.buffer_index] == -1
+    assert pending.sum() == 2 and (learner.slot_weight[:buffer.buffer_index][pending] == 0).all()

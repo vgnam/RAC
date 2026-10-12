@@ -1,0 +1,28 @@
+# --- TR-IQL v2: block-level tremble-robust optimism (see docs/TR_IQL.md) ---
+# Q is trained every episode by double-Q TD on the replay buffer; episodes are
+# weighted by whether their block is not significantly worse than the best group
+# of blocks (pooled by mean episode return). Set the execution tremble with
+# env_args.tremble_eps.
+extends: tr_iql
+
+learner: "tremble_block_learner"
+mac: "tremble_block_mac"
+freeze_acting: True  # act with a per-block snapshot, so intentions stay fixed within a block
+
+block_len: 200  # episodes per block
+pool_z: 3.0  # z-score (block mean vs best group) for replace / merge / ignore
+block_beta: 0.1  # sampling weight of episodes from significantly worse blocks
+block_var_floor: 0.0001  # floor on the variance of a block's mean return
+
+explore_policy: "action"
+explore_noise: 1.0  # noisy_greedy only: scale of the committed random score
+
+lr: 0.0005
+batch_size: 32
+buffer_size: 5000
+training_iters: 1
+target_update_interval: 200
+double_q: True
+gamma: 0.99
+
+name: "tr_iql_v2"

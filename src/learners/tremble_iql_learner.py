@@ -80,33 +80,10 @@ class TrembleIQLLearner:
         """All updates happen at block ends (``observe_episode``)."""
 
     def _unroll(self, agent, batch):
-        """Q-values for a whole batch of episodes, (bs, T, n_agents, n_actions).
-
-        For the default RNN agent the encoder and output layer run once over all
-        timesteps; only the GRU cell is stepped. Same arithmetic as ``agent.forward``
-        per step, but avoids ~3 small kernel launches per timestep.
-        """
-        if not (hasattr(agent, "fc2") and hasattr(agent, "encoder") and hasattr(agent, "recurrent")):
-            return self._unroll_stepwise(agent, batch)
-        inputs = self.mac._build_sequence_inputs(batch)  # (bs, T, n_agents, input_dim)
-        x = agent.encoder(inputs) if agent.encoder is not None else th.relu(agent.fc1(inputs))
-        if agent.recurrent:
-            bs, n = batch.batch_size, self.n_agents
-            h = agent.init_hidden().expand(bs * n, -1)
-            hs = []
-            for t in range(batch.max_seq_length):
-                h = agent.rnn(x[:, t].reshape(bs * n, -1), h)
-                hs.append(h.view(bs, n, -1))
-            x = th.stack(hs, dim=1)
-        return agent.fc2(x)
+        return unroll_agent(self.mac, agent, batch, self.n_agents)
 
     def _unroll_stepwise(self, agent, batch):
-        hidden = agent.init_hidden().unsqueeze(0).expand(batch.batch_size, self.n_agents, -1)
-        outs = []
-        for t in range(batch.max_seq_length):
-            q, hidden = agent(self.mac._build_inputs(batch, t), hidden)
-            outs.append(q.view(batch.batch_size, self.n_agents, -1))
-        return th.stack(outs, dim=1)  # (bs, T, n_agents, n_actions)
+        return unroll_agent_stepwise(self.mac, agent, batch, self.n_agents)
 
     def _fit(self, agent, opt, batch, target, mask, actions=None):
         """Regress agent outputs on target; on the taken actions only if ``actions`` is given."""
@@ -230,3 +207,34 @@ class TrembleIQLLearner:
         load = lambda f: th.load("{}/{}".format(path, f), map_location=lambda storage, loc: storage)
         self.qe_agent.load_state_dict(load("qe_agent.th"))
         self.sel_agent.load_state_dict(load("sel_agent.th"))
+
+
+def unroll_agent(mac, agent, batch, n_agents):
+    """Q-values for a whole batch of episodes, (bs, T, n_agents, n_actions).
+
+    For the default RNN agent the encoder and output layer run once over all
+    timesteps; only the GRU cell is stepped. Same arithmetic as ``agent.forward``
+    per step, but avoids ~3 small kernel launches per timestep.
+    """
+    if not (hasattr(agent, "fc2") and hasattr(agent, "encoder") and hasattr(agent, "recurrent")):
+        return unroll_agent_stepwise(mac, agent, batch, n_agents)
+    inputs = mac._build_sequence_inputs(batch)  # (bs, T, n_agents, input_dim)
+    x = agent.encoder(inputs) if agent.encoder is not None else th.relu(agent.fc1(inputs))
+    if agent.recurrent:
+        bs = batch.batch_size
+        h = agent.init_hidden().expand(bs * n_agents, -1)
+        hs = []
+        for t in range(batch.max_seq_length):
+            h = agent.rnn(x[:, t].reshape(bs * n_agents, -1), h)
+            hs.append(h.view(bs, n_agents, -1))
+        x = th.stack(hs, dim=1)
+    return agent.fc2(x)
+
+
+def unroll_agent_stepwise(mac, agent, batch, n_agents):
+    hidden = agent.init_hidden().unsqueeze(0).expand(batch.batch_size, n_agents, -1)
+    outs = []
+    for t in range(batch.max_seq_length):
+        q, hidden = agent(mac._build_inputs(batch, t), hidden)
+        outs.append(q.view(batch.batch_size, n_agents, -1))
+    return th.stack(outs, dim=1)  # (bs, T, n_agents, n_actions)

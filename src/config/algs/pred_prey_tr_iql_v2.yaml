@@ -1,0 +1,14 @@
+# TR-IQL v2 preset for the shared Predator-Prey benchmark (same optimiser, buffer,
+# batch and target schedule as the IQL / RAC presets).
+extends: tr_iql_v2
+
+block_len: 20  # episodes per block (200 steps each): 1M steps -> 250 blocks
+block_var_floor: 1.0  # returns are O(10)
+explore_policy: "noisy_greedy"
+
+epsilon_start: 1.0
+epsilon_finish: 0.2  # per-agent probability of an exploring block; keeps blocks diverse
+epsilon_anneal_time: 50000
+
+wandb_group: "pred-prey-main"
+wandb_tags: ["predator-prey", "tr_iql_v2"]
