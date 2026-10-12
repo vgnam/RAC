@@ -1,0 +1,16 @@
+# TR-IQL preset for the shared Predator-Prey benchmark.
+# Set the execution tremble with env_args.tremble_eps (e.g. 0.1) on the command
+# line, and use the same value for the IQL / RAC baselines.
+extends: tr_iql
+
+# Multi-step game: commit to a random deterministic policy per block.
+explore_policy: "random_linear"
+block_len: 20  # episodes per block (200 steps each): 1M steps -> 250 blocks
+
+gamma: 0.99
+epsilon_start: 1.0
+epsilon_finish: 0.05
+epsilon_anneal_time: 50000
+
+wandb_group: "pred-prey-main"
+wandb_tags: ["predator-prey", "tr_iql"]

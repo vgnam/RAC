@@ -47,3 +47,34 @@ def test_tr_iql_recovers_fixed_point_on_deterministic_game():
     game = G.climbing()
     q = L.tremble_robust_iql(game, 0.0, rng, n_blocks=200, block_len=20)
     assert np.allclose(q, G.individual_optimum(game.mean_payoff))
+
+
+def test_tremble_learner_fused_unroll_matches_stepwise():
+    from types import SimpleNamespace
+
+    import torch as th
+
+    from src.controllers.basic_controller import BasicMAC
+    from src.learners.tremble_iql_learner import TrembleIQLLearner
+    from src.modules.agents.rnn_agent import RNNAgent
+
+    th.manual_seed(0)
+    bs, T, n, obs_dim, n_actions = 3, 7, 4, 5, 6
+    args = SimpleNamespace(rnn_hidden_dim=16, n_actions=n_actions,
+                           obs_last_action=True, obs_agent_id=True)
+    actions = th.randint(n_actions, (bs, T, n))
+    data = {"obs": th.randn(bs, T, n, obs_dim),
+            "actions_onehot": th.nn.functional.one_hot(actions, n_actions).float()}
+    batch = type("Batch", (), {"__getitem__": lambda self, k: data[k],
+                               "batch_size": bs, "max_seq_length": T, "device": "cpu"})()
+    mac = SimpleNamespace(args=args, n_agents=n)
+    mac._build_inputs = lambda b, t: BasicMAC._build_inputs(mac, b, t)
+    mac._build_sequence_inputs = lambda b: BasicMAC._build_sequence_inputs(mac, b)
+    agent = RNNAgent(obs_dim + n_actions + n, args)
+    learner = SimpleNamespace(mac=mac, n_agents=n)
+    learner._unroll_stepwise = lambda a, b: TrembleIQLLearner._unroll_stepwise(learner, a, b)
+
+    fused = TrembleIQLLearner._unroll(learner, agent, batch)
+    stepwise = TrembleIQLLearner._unroll_stepwise(learner, agent, batch)
+    assert fused.shape == (bs, T, n, n_actions)
+    assert th.allclose(fused, stepwise, atol=1e-6)

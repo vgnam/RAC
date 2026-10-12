@@ -171,6 +171,7 @@ if __name__ == '__main__':
             'tr_iql',
             'tr_iql_lbf',
             'tr_iql_dro',
+            'pred_prey_tr_iql',
         ],
     )
     parser.add_argument(
