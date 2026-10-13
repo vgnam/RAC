@@ -149,3 +149,44 @@ def test_block_learner_calibration_moves_beta_towards_ceiling():
     learner.args.calib_bonus, learner.args.calib_bonus_anneal = 10.0, 100
     learner._update_beta(v_opt=10.0, t_env=0)                    # the bonus lifts the ceiling to 16
     assert learner.ceiling == 16.0 and learner.beta_neg < 1.0
+
+
+def test_gpi_learner_tags_blocks_counts_actions_and_recycles_heads():
+    from types import SimpleNamespace
+
+    import torch as th
+
+    from src.learners.tremble_gpi_learner import TrembleGPILearner
+    from src.modules.agents.rnn_agent import RNNAgent
+
+    n, A, T = 2, 3, 4
+    args = SimpleNamespace(n_agents=n, n_actions=A, rnn_hidden_dim=8, gpi_blocks=2, block_len=2,
+                           gpi_min_count=1, lr=1e-3, optim_alpha=0.99, optim_eps=1e-5, learner_log_interval=1)
+    agent = RNNAgent(5, args)
+    mac = SimpleNamespace(agent=agent, parameters=agent.parameters, blocks=0)
+    mac.new_block = lambda t_env: setattr(mac, "blocks", mac.blocks + 1)
+    learner = TrembleGPILearner(mac, None, None, args)
+    buffer = SimpleNamespace(buffer_size=16, buffer_index=0)
+    learner.set_buffer(buffer)
+
+    def episode(action):
+        data = {"filled": th.ones(1, T + 1, 1), "terminated": th.zeros(1, T + 1, 1),
+                "actions": th.full((1, T + 1, n, 1), action, dtype=th.long), "reward": th.ones(1, T + 1, 1)}
+        return type("Ep", (), {"batch_size": 1, "__getitem__": lambda self, k: data[k]})()
+
+    for action in (0, 1):                       # block 0: halves A (action 0) and B (action 1)
+        buffer.buffer_index += 1
+        learner.observe_episode(episode(action), t_env=0)
+    assert learner.cur_block == 1 and mac.blocks == 1
+    assert list(learner.slot_owner[:2]) == [0, 0] and list(learner.slot_half[:2]) == [0, 1]
+    assert learner.counts[0, :, 0].tolist() == [T, T] and learner.counts[1, :, 1].tolist() == [T, T]
+    with th.no_grad():
+        learner.heads.weight += 1.0             # train heads away from the decision layer
+    for action in (2, 2):                       # block 1 uses slot 1
+        buffer.buffer_index += 1
+        learner.observe_episode(episode(action), t_env=0)
+    assert learner.cur_block == 2               # block 2 reuses slot 0: reset to fc2, counts cleared
+    w = learner.heads.weight.view(4, A, -1)
+    assert th.allclose(w[0], agent.fc2.weight) and th.allclose(w[1], agent.fc2.weight)
+    assert learner.counts[0:2].sum() == 0 and learner.counts[3, :, 2].tolist() == [T, T]
+    assert list(learner._live_blocks()) == [1, 2]

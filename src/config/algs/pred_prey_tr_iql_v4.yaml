@@ -1,0 +1,13 @@
+# TR-IQL v4 preset for the shared Predator-Prey benchmark.
+extends: tr_iql_v4
+
+block_len: 20  # episodes per block (200 steps each): window of 50 blocks = 200k steps
+explore_policy: "noisy_greedy"
+explore_noise: 3.0
+
+epsilon_start: 1.0
+epsilon_finish: 0.3
+epsilon_anneal_time: 50000
+
+wandb_group: "pred-prey-main"
+wandb_tags: ["predator-prey", "tr_iql_v4"]

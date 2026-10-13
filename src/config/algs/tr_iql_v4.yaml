@@ -1,0 +1,16 @@
+# --- TR-IQL v4: per-state optimism over teammates' intentions via block heads ---
+# Each of the last gpi_blocks blocks owns two Q heads (one per half of its
+# episodes) trained by TD on that block only, so they average over tremble under
+# fixed teammate intentions. The acting layer is regressed onto the per-state max
+# over blocks (select on one half, evaluate on the other). See docs/TR_IQL.md.
+extends: tr_iql_v2
+
+learner: "tremble_gpi_learner"
+mac: "tremble_block_mac"
+freeze_acting: True
+
+gpi_blocks: 50  # live blocks in the max (window of gpi_blocks * block_len episodes)
+gpi_min_count: 5  # times both halves of a block must have taken (agent, action) to enter the max
+distill_weight: 1.0
+
+name: "tr_iql_v4"

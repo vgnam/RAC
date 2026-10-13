@@ -218,6 +218,11 @@ def unroll_agent(mac, agent, batch, n_agents):
     """
     if not (hasattr(agent, "fc2") and hasattr(agent, "encoder") and hasattr(agent, "recurrent")):
         return unroll_agent_stepwise(mac, agent, batch, n_agents)
+    return agent.fc2(agent_features(mac, agent, batch, n_agents))
+
+
+def agent_features(mac, agent, batch, n_agents):
+    """Inputs of the default RNN agent's output layer, (bs, T, n_agents, rnn_hidden_dim)."""
     inputs = mac._build_sequence_inputs(batch)  # (bs, T, n_agents, input_dim)
     x = agent.encoder(inputs) if agent.encoder is not None else th.relu(agent.fc1(inputs))
     if agent.recurrent:
@@ -228,7 +233,7 @@ def unroll_agent(mac, agent, batch, n_agents):
             h = agent.rnn(x[:, t].reshape(bs * n_agents, -1), h)
             hs.append(h.view(bs, n_agents, -1))
         x = th.stack(hs, dim=1)
-    return agent.fc2(x)
+    return x
 
 
 def unroll_agent_stepwise(mac, agent, batch, n_agents):

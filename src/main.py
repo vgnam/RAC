@@ -176,6 +176,8 @@ if __name__ == '__main__':
             'pred_prey_tr_iql_v2',
             'tr_iql_v3',
             'pred_prey_tr_iql_v3',
+            'tr_iql_v4',
+            'pred_prey_tr_iql_v4',
         ],
     )
     parser.add_argument(
