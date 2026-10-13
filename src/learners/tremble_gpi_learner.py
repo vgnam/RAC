@@ -41,8 +41,8 @@ class TrembleGPILearner:
         self.n_agents = args.n_agents
         self.n_actions = args.n_actions
         agent = mac.agent
-        assert hasattr(agent, "fc2") and getattr(agent, "recurrent", False), \
-            "TrembleGPILearner needs the default recurrent RNN agent"
+        assert hasattr(agent, "fc2") and hasattr(agent, "encoder") and hasattr(agent, "recurrent"), \
+            "TrembleGPILearner needs the default RNN agent (agent: rnn; agent_recurrent may be False)"
 
         self.H = int(args.gpi_blocks)
         self.block_len = int(args.block_len)
@@ -68,6 +68,9 @@ class TrembleGPILearner:
         self.best_block_mean = -np.inf
 
         self.last_target_update_episode = 0
+        steps = getattr(args, "target_update_interval_steps", None)
+        self.target_update_interval_steps = int(steps) if steps is not None else None
+        self.last_target_update_t = 0
         self.log_stats_t = -args.learner_log_interval - 1
 
     # ----- block bookkeeping -------------------------------------------------------
@@ -202,10 +205,15 @@ class TrembleGPILearner:
         grad_norm = th.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
         self.optimiser.step()
 
-        if (episode_num - self.last_target_update_episode) / self.args.target_update_interval >= 1.0:
+        if self.target_update_interval_steps is not None:
+            update = t_env - self.last_target_update_t >= self.target_update_interval_steps
+        else:
+            update = (episode_num - self.last_target_update_episode) / self.args.target_update_interval >= 1.0
+        if update:
             self.target_agent.load_state_dict(self.mac.agent.state_dict())
             self.target_heads.load_state_dict(self.heads.state_dict())
             self.last_target_update_episode = episode_num
+            self.last_target_update_t = t_env
 
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
             n_td = td_mask.sum().item()
