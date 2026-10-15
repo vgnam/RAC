@@ -13,6 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import RMSprop
 from torch.distributions import Categorical
+from src.modules.contrastive_context import ContrastiveContextLabeler
 
 
 class DualEpisodeREEQLearner:
@@ -101,7 +102,25 @@ class DualEpisodeREEQLearner:
                 return_min, return_max, num=args.slot_number + 1
             )
 
+        if 'matrix_game_repeated' in args.env:
+            # RAC's linspace bins over the attainable episode-return range.
+            low, high = getattr(args, 'rac_return_range', (-30.0, 14.0))
+            horizon = int(args.env_args['episode_limit'])
+            self.possible_returns = np.linspace(
+                low * horizon, high * horizon, num=args.slot_number + 1
+            )
+
         print("possible returns", self.possible_returns)
+
+        # Optional CoRAC labeler: replaces bin(R) by contrastive, return-anchored contexts.
+        self.context_labeler = None
+        if getattr(args, 'context_labeler', 'return_bins') == 'corac':
+            self.context_labeler = ContrastiveContextLabeler(
+                scheme["obs"]["vshape"], args.n_actions, args.n_agents, args
+            )
+            self.labeler_optimiser = th.optim.Adam(
+                self.context_labeler.parameters(), lr=getattr(args, 'corac_lr', 5e-4)
+            )
 
         self.optimiser = RMSprop(params=self.params, lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
 
@@ -133,7 +152,7 @@ class DualEpisodeREEQLearner:
             onehot_return_indices = np.eye(self.args.slot_number, dtype=np.int32)[return_indices]  # (bs, max_seq_length, n_agents, slot_number)
             onehot_return_indices = th.from_numpy(onehot_return_indices).to(device=self.args.device, dtype=th.float32)
 
-        elif any(name in self.args.env for name in ("stag_hunt", "sc2", "mate", "lbf")):
+        elif any(name in self.args.env for name in ("stag_hunt", "sc2", "mate", "lbf", "matrix_game_repeated")):
             returns_expand_flat = returns_expand.reshape(-1)    # (bs*max_seq_length*n_agents)
             return_index = np.digitize(returns_expand_flat, bins=self.possible_returns, right=False) - 1
             return_index = np.clip(return_index, 0, self.args.slot_number - 1)
@@ -144,6 +163,17 @@ class DualEpisodeREEQLearner:
 
         else:
             raise Exception("Not implemented.")
+
+        corac_stats = None
+        if self.context_labeler is not None:
+            onehot_return_indices, _, corac_loss, corac_stats = self.context_labeler.label(
+                batch, mask, t_env
+            )
+            if corac_loss is not None:
+                self.labeler_optimiser.zero_grad()
+                corac_loss.backward()
+                th.nn.utils.clip_grad_norm_(self.context_labeler.parameters(), self.args.grad_norm_clip)
+                self.labeler_optimiser.step()
 
         belief_outputs = None
         belief_losses = None
@@ -291,6 +321,9 @@ class DualEpisodeREEQLearner:
             self.logger.log_stat("td_loss", td_loss.item(), t_env)
             self.logger.log_stat("kl_loss", (self.args.kl_weight * kl_loss).item(), t_env)
             self.logger.log_stat("twin_td_loss", twin_td_loss.item(), t_env)
+            if corac_stats is not None:
+                for key, value in corac_stats.items():
+                    self.logger.log_stat(key, value, t_env)
 
             mask_elems = mask.sum()
             valid_twin_td_errors = twin_td_error.detach().abs()[mask.bool()]
@@ -463,6 +496,8 @@ class DualEpisodeREEQLearner:
     def cuda(self):
         self.mac.cuda()
         self.target_mac.cuda()
+        if self.context_labeler is not None:
+            self.context_labeler.to(self.args.device)
         if self.mixer is not None:
             self.mixer.to(self.args.device)
             self.target_mixer.to(self.args.device)

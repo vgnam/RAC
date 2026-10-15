@@ -1,0 +1,10 @@
+# --- UCVaR-IQL: IQL with an upper-CVaR target (see src/learners/ucvar_q_learner.py) ---
+# Q regresses on eta + (Y - eta)_+ / alpha, the mean of the top alpha tail of the TD
+# target Y; a second agent network eta tracks the (1 - alpha)-quantile of Y.
+# ucvar_alpha = 1 is IQL; small alpha approaches distributed Q (max over targets).
+extends: iql
+
+learner: "ucvar_q_learner"
+ucvar_alpha: 0.3
+
+name: "ucvar_iql"

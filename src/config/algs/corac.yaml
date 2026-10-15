@@ -1,0 +1,21 @@
+# CoRAC: RAC with contrastive, return-anchored context labels.
+# Value learning and execution are identical to dual_iql_ree (RAC).
+extends: dual_iql_ree
+
+context_labeler: "corac"
+corac_segment_len: 1      # steps per segment (view)
+corac_gap: 0              # extra steps between the two views
+corac_embed_dim: 32
+corac_hidden_dim: 64
+corac_proj_dim: 32
+corac_temperature: 0.1
+corac_n_hard: 4           # outcome-swapped negatives per anchor
+corac_debias: True
+corac_lambda_final: 0.0   # luck knob: 1 = RAC with quantile bins, 0 = pure CoRAC
+corac_warmup_steps: 10000
+corac_blend_steps: 10000
+corac_stat_momentum: 0.01
+corac_quantile_buffer: 4096
+corac_lr: 0.0005
+
+name: "corac"

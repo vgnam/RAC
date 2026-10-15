@@ -1,0 +1,6 @@
+# Ablation: RAC with equal-mass (quantile) return bins, i.e. CoRAC with lambda = 1.
+extends: corac
+
+corac_lambda_final: 1.0
+
+name: "rac_quantile"

@@ -190,3 +190,30 @@ def test_gpi_learner_tags_blocks_counts_actions_and_recycles_heads():
     assert th.allclose(w[0], agent.fc2.weight) and th.allclose(w[1], agent.fc2.weight)
     assert learner.counts[0:2].sum() == 0 and learner.counts[3, :, 2].tolist() == [T, T]
     assert list(learner._live_blocks()) == [1, 2]
+
+
+def test_upper_cvar_takes_top_mass():
+    assert L.upper_cvar([0, 10], [0.5, 0.5], 0.5) == pytest.approx(10)
+    assert L.upper_cvar([0, 10], [0.5, 0.5], 1.0) == pytest.approx(5)
+    assert L.upper_cvar([-30, 7, 6], [1 / 3] * 3, 0.5) == pytest.approx((7 / 3 + 6 / 6) / 0.5)
+
+
+def test_exact_ucvar_alpha_one_is_mean_and_small_alpha_is_max():
+    game = G.climbing()
+    assert np.allclose(L.exact_ucvar(game, 1.0), [game.mean_payoff.mean(axis=1), game.mean_payoff.mean(axis=0)])
+    assert np.allclose(L.exact_ucvar(game, 0.3), G.individual_optimum(game.mean_payoff))
+
+
+@pytest.mark.parametrize("n", [2, 3, 4])
+def test_n_agent_climbing_phase_boundary(n):
+    game, a_star = G.n_agent_climbing(n), 1.2 * 3.0 ** -(n - 1)
+    assert L.exact_ucvar(game, 0.9 * a_star)[0].argmax() == 0
+    assert L.exact_ucvar(game, 1.1 * a_star)[0].argmax() != 0
+
+
+@pytest.mark.parametrize("alpha,expected", [(1.0, [5, 4]), (0.5, [10, 4])])
+def test_ucvar_iql_learns_upper_cvar_on_a_bandit(alpha, expected):
+    bandit = G.MatrixGame("bandit", np.array([[0.0, 10.0], [4.0, 4.0]]))
+    q = L.ucvar_iql(bandit, 0.0, np.random.default_rng(0), 20000, n_runs=4, alpha=alpha,
+                    lr=0.02, lr_eta=0.05, explore_end=1.0)
+    assert np.allclose(q[:, 0].mean(axis=0), expected, atol=0.7)

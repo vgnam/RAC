@@ -1,0 +1,8 @@
+# UCVaR-IQL preset for the shared Predator-Prey benchmark (same schedule as pred_prey_iql).
+extends: pred_prey_iql
+
+learner: "ucvar_q_learner"
+ucvar_alpha: 0.3
+
+name: "ucvar_iql"
+wandb_tags: ["predator-prey", "ucvar_iql"]

@@ -2,6 +2,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import random
 import numpy as np
 import collections
 import collections.abc
@@ -33,6 +34,7 @@ def my_main(_run, _config, _log):
     # Setting the random seed throughout the modules
     config = config_copy(_config)
     np.random.seed(config["seed"])
+    random.seed(config["seed"])  # stag_hunt draws ghost prey with `random`
     th.manual_seed(config["seed"])
     config['env_args']['seed'] = config["seed"]
 
@@ -140,8 +142,11 @@ if __name__ == '__main__':
             'matrix_game_3_tremble',
             'matrix_game_climbing',
             'matrix_game_penalty',
+            'matrix_game_rep_climbing',
+            'matrix_game_rep_pstoch',
             'lbf',
             'pred_prey_punish',
+            'pred_prey_ghost',
             'sc2',
             'mate',
             'mate_ippo',
@@ -178,6 +183,14 @@ if __name__ == '__main__':
             'pred_prey_tr_iql_v3',
             'tr_iql_v4',
             'pred_prey_tr_iql_v4',
+            'ucvar_iql',
+            'lbf_ucvar_iql',
+            'pred_prey_ucvar_iql',
+            'pred_prey_lucvar_iql',
+            'corac',
+            'rac_quantile',
+            'pred_prey_corac',
+            'lucvar_iql',
         ],
     )
     parser.add_argument(

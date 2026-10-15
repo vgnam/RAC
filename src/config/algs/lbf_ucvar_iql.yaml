@@ -1,0 +1,5 @@
+# UCVaR-IQL preset for Level-Based Foraging (IQL schedule of iql.yaml).
+extends: ucvar_iql
+
+wandb_group: "lbf-ucvar"
+wandb_tags: ["lbf", "ucvar_iql"]

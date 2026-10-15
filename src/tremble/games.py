@@ -85,6 +85,18 @@ def n_agent_coordination(n):
     return _deterministic("n_agent_{}".format(n), table)
 
 
+def n_agent_climbing(n):
+    """Three actions. All 0 -> 10; some but not all 0 -> -20; no 0 -> 5. Action 0 pays 10
+    only when every teammate also plays it (probability 3^-(n-1) under uniform play),
+    actions 1/2 pay 5 whenever no teammate plays 0. Under uniform teammates CVaR+_alpha
+    prefers action 0 iff alpha < 1.2 * 3^-(n-1)."""
+    table = np.empty((3,) * n)
+    for joint in product(range(3), repeat=n):
+        zeros = joint.count(0)
+        table[joint] = 10 if zeros == n else (-20 if zeros else 5)
+    return _deterministic("n_agent_climbing_{}".format(n), table)
+
+
 def tremble_kernel(n_actions, eps):
     """K[intended, executed]: keep with prob 1-eps, slip uniformly otherwise."""
     if n_actions == 1:

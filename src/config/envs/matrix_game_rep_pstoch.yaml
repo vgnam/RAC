@@ -1,0 +1,21 @@
+env: matrix_game_repeated
+
+env_args:
+  game: "partially_stochastic_climbing"
+  n_agents: 2
+  n_actions: 3
+  episode_limit: 2
+  obs_last_action: False
+  state_last_action: False
+
+# RAC linspace bins cover [low, high] * episode_limit.
+rac_return_range: [-30, 14]
+slot_number: 6
+
+learner_log_interval: 1000
+log_interval: 1000
+runner_log_interval: 1000
+t_max: 50000
+test_interval: 1000
+test_nepisode: 20
+test_greedy: True

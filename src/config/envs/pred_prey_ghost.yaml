@@ -1,0 +1,19 @@
+# Predator-Prey with stochastic capture rewards ("ghosts"), for comparing how
+# optimistic methods (RAC, CoRAC, (L)UCVaR-IQL) cope with environment luck.
+#
+# Each step the prey is a ghost with probability q = 1 - random_ghosts_prob
+# (stag_hunt.py: ghost_indicator = not (random() < random_ghosts_prob)).
+# Capturing a ghost pays reward_stag * random_ghosts_mul instead of reward_stag.
+# The ghost flag is only marked in a grid corner (moved every episode), which
+# agents with a 5x5 view rarely see, so the capture payoff is effectively a coin
+# flip: +10 with prob 1 - q, 10 * mul with prob q.
+#   random_ghosts_prob 1.0 -> q = 0   (same payoffs as pred_prey_punish)
+#   random_ghosts_prob 0.7 -> q = 0.3 (expected capture = +5.5)
+#   random_ghosts_prob 0.5 -> q = 0.5 (expected capture = +2.5)
+extends: pred_prey_punish
+
+env_args:
+    random_ghosts: True
+    random_ghosts_prob: 0.5     # = 1 - P(ghost)
+    random_ghosts_mul: -0.5     # ghost capture pays 10 * mul = -5
+    random_ghosts_indicator: True

@@ -1,0 +1,24 @@
+# CoRAC preset for the shared Predator-Prey benchmark: RAC (pred_prey_rac) with
+# contrastive, return-anchored context labels. Value learning, replay, epsilon
+# schedule and execution are identical to pred_prey_rac.
+extends: pred_prey_rac
+
+context_labeler: "corac"
+corac_segment_len: 8      # steps per view; episodes are 200 steps
+corac_gap: 8              # extra steps between the two views of an episode
+corac_embed_dim: 32
+corac_hidden_dim: 64
+corac_proj_dim: 32
+corac_temperature: 0.1
+corac_n_hard: 4           # outcome-swapped negatives per anchor
+corac_pool_size: 4096     # random candidate steps for the neighbour search
+corac_debias: True
+corac_lambda_final: 0.0   # luck knob: 1 = RAC with quantile bins, 0 = pure CoRAC
+corac_warmup_steps: 50000 # keep realised-return labels while epsilon anneals
+corac_blend_steps: 50000
+corac_stat_momentum: 0.01
+corac_quantile_buffer: 4096
+corac_lr: 0.0005
+
+name: "corac"
+wandb_tags: ["predator-prey", "corac"]

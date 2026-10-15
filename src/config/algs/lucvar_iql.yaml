@@ -1,0 +1,14 @@
+# Lenient UCVaR-IQL for any environment (same lenient schedule as pred_prey_lucvar_iql):
+# alpha per (observation, action), from ucvar_alpha_start (optimistic) to ucvar_alpha_end
+# (IQL) as the SimHash bucket of the observation with that action is visited.
+# alpha(n) = end - (end - start) * exp(-n / ucvar_count_scale).
+extends: ucvar_iql
+
+ucvar_lenient: True
+ucvar_alpha_start: 0.05
+ucvar_alpha_end: 1.0
+ucvar_count_scale: 1000
+ucvar_hash_bits: 16
+ucvar_log_action: null   # set to an action index to log its mean alpha
+
+name: "lucvar_iql"

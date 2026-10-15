@@ -20,6 +20,7 @@ def test_pred_prey_value_based_presets_share_training_schedule():
         _load_config("pred_prey_iql", "algs"),
         _load_config("pred_prey_rac", "algs"),
         _load_config("pred_prey_belief_rac", "algs"),
+        _load_config("pred_prey_ucvar_iql", "algs"),
     ]
 
     for config in configs:
@@ -57,3 +58,14 @@ def test_pred_prey_task_budget_is_shared_by_all_presets():
     assert environment["t_max"] == 1_000_000
     assert environment["test_interval"] == 5_000
     assert environment["test_nepisode"] == 32
+
+
+def test_pred_prey_ghost_only_adds_stochastic_capture_reward():
+    base = _load_config("pred_prey_punish", "envs")
+    ghost = _load_config("pred_prey_ghost", "envs")
+
+    changed = {k for k in ghost["env_args"] if ghost["env_args"][k] != base["env_args"].get(k)}
+    assert changed <= {"random_ghosts", "random_ghosts_prob", "random_ghosts_mul", "random_ghosts_indicator"}
+    assert ghost["env_args"]["random_ghosts"] is True
+    assert ghost["env_args"]["random_ghosts_mul"] < 0
+    assert ghost["t_max"] == base["t_max"]

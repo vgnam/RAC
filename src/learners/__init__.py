@@ -5,6 +5,7 @@ from .ippo_learner import IPPOLearner
 from .tremble_iql_learner import TrembleIQLLearner
 from .tremble_block_learner import TrembleBlockLearner
 from .tremble_gpi_learner import TrembleGPILearner
+from .ucvar_q_learner import UCVaRQLearner
 
 
 REGISTRY = {}
@@ -17,3 +18,4 @@ REGISTRY["ippo_learner"] = IPPOLearner
 REGISTRY["tremble_iql_learner"] = TrembleIQLLearner
 REGISTRY["tremble_block_learner"] = TrembleBlockLearner
 REGISTRY["tremble_gpi_learner"] = TrembleGPILearner
+REGISTRY["ucvar_q_learner"] = UCVaRQLearner

@@ -1,0 +1,15 @@
+# Lenient UCVaR-IQL for Predator-Prey: alpha per (observation, action), from
+# ucvar_alpha_start (optimistic) to ucvar_alpha_end (IQL) as the pair is visited.
+# alpha(n) = end - (end - start) * exp(-n / ucvar_count_scale), n = visits of the
+# SimHash bucket of the observation with that action, counted over all agents.
+extends: pred_prey_ucvar_iql
+
+ucvar_lenient: True
+ucvar_alpha_start: 0.05
+ucvar_alpha_end: 1.0
+ucvar_count_scale: 1000
+ucvar_hash_bits: 16
+ucvar_log_action: 5     # log the mean alpha of 'catch'
+
+name: "lucvar_iql"
+wandb_tags: ["predator-prey", "lucvar_iql"]

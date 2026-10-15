@@ -14,6 +14,8 @@ over blocks keyed by a_i gives max_{a_-i} r_eps(a_i, a_-i), the fixed point of
 T_eps. A double estimator (select on one half of the block, evaluate on the
 other) limits the upward bias of maximising over noisy means.
 """
+from itertools import product
+
 import numpy as np
 
 from .games import individual_optimum, noisy_payoff, tremble, tremble_kernel
@@ -162,6 +164,62 @@ def iql(game, eps, rng, n_episodes, n_runs=1, lr=0.1, explore_start=1.0, explore
         step = lr if beta is None else np.where(td > 0, lr, beta)
         q[runs, agents, intents] += step * td
     return q
+
+
+def ucvar_iql(game, eps, rng, n_episodes, n_runs=1, alpha=0.1, lr=0.1, lr_eta=0.1, explore_start=1.0,
+              explore_end=0.05, anneal_frac=0.5):
+    """Upper-CVaR IQL: IQL whose target is the mean of the top ``alpha`` tail of the
+    TD target instead of its mean, for ``n_runs`` independent runs -> (n_runs, n, A).
+
+    If teammates play every joint action with probability >= alpha, each teammate-induced
+    target distribution has density ratio <= 1/alpha w.r.t. the observed mixture, so
+    max over teammates <= CVaR+_alpha (equality for deterministic payoffs). It is
+    estimated with the Rockafellar-Uryasev form CVaR+_alpha(Y) = min_eta eta + E[(Y-eta)_+]/alpha:
+    eta tracks the (1-alpha)-quantile by the pinball update, Q regresses on
+    eta + (Y-eta)_+ / alpha. ``alpha=1`` is IQL."""
+    n, A = game.n_agents, game.n_actions
+    q = np.zeros((n_runs, n, A))
+    eta = np.zeros((n_runs, n, A))
+    runs, agents = np.arange(n_runs)[:, None], np.arange(n)[None]
+    anneal = max(1, int(anneal_frac * n_episodes))
+    for t in range(n_episodes):
+        e = explore_start + (explore_end - explore_start) * min(1.0, t / anneal)
+        greedy = q.argmax(axis=2)
+        intents = np.where(rng.random((n_runs, n)) < e, rng.integers(A, size=(n_runs, n)), greedy)
+        y = game.sample_rewards(tremble(intents, eps, A, rng), rng)[:, None]
+        e_old = eta[runs, agents, intents]
+        target = e_old + np.maximum(y - e_old, 0.0) / alpha
+        q[runs, agents, intents] += lr * (target - q[runs, agents, intents])
+        eta[runs, agents, intents] += lr_eta * ((1.0 - alpha) - (y < e_old))
+    return q
+
+
+def upper_cvar(values, probs, alpha):
+    """Mean of the top ``alpha`` probability mass of a discrete distribution."""
+    order = np.argsort(values)[::-1]
+    v, p = np.asarray(values, float)[order], np.asarray(probs, float)[order]
+    take = np.minimum(p, np.maximum(alpha - np.concatenate([[0.0], np.cumsum(p)[:-1]]), 0.0))
+    return float((take * v).sum() / alpha)
+
+
+def exact_ucvar(game, alpha, teammate_probs=None):
+    """CVaR+_alpha of each agent's reward per own action when teammates act independently
+    with ``teammate_probs`` (n, A) (uniform if None) -> (n, A)."""
+    n, A = game.n_agents, game.n_actions
+    probs = np.full((n, A), 1.0 / A) if teammate_probs is None else np.asarray(teammate_probs)
+    out = np.zeros((n, A))
+    K = game.outcomes.shape[-1]
+    for i in range(n):
+        for a in range(A):
+            vals, ps = [], []
+            for joint in product(range(A), repeat=n):
+                if joint[i] != a:
+                    continue
+                pj = np.prod([probs[j, joint[j]] for j in range(n) if j != i])
+                vals.extend(game.outcomes[joint])
+                ps.extend([pj / K] * K)
+            out[i, a] = upper_cvar(vals, ps, alpha)
+    return out
 
 
 def exact_fixed_points(game, eps):

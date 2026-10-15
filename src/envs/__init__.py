@@ -19,6 +19,7 @@ from .matrix_game.matrix_game_penalty import Matrix_Game_Penalty_Env
 from .matrix_game.matrix_game_partially_stochastic import Matrix_Game_Partially_Stochastic_Env
 from .matrix_game.matrix_game_fully_stochastic import Matrix_Game_Fully_Stochastic_Env
 from .matrix_game.matrix_game_gaussian import Matrix_Game_Gaussian_Env
+from .matrix_game.matrix_game_repeated import Matrix_Game_Repeated_Env
 from .tremble_wrapper import TrembleWrapper
 
 
@@ -48,6 +49,7 @@ REGISTRY["matrix_game_penalty"] = partial(env_fn, env=Matrix_Game_Penalty_Env)
 REGISTRY["matrix_game_partially_stochastic"] = partial(env_fn, env=Matrix_Game_Partially_Stochastic_Env)
 REGISTRY["matrix_game_fully_stochastic"] = partial(env_fn, env=Matrix_Game_Fully_Stochastic_Env)
 REGISTRY["matrix_game_gaussian"] = partial(env_fn, env=Matrix_Game_Gaussian_Env)
+REGISTRY["matrix_game_repeated"] = partial(env_fn, env=Matrix_Game_Repeated_Env)
 
 
 def _lbf_env(**kwargs):
