@@ -18,5 +18,9 @@ corac_pool_size: 4096
 corac_stat_momentum: 0.01
 corac_lr: 0.0005
 
+# See corac.yaml: bound the twin bootstrap and the teacher to the realisable
+# episode-return range (hc_rac_method.md 4.3, hc_rac_audit.md 3.2).
+twin_target_clamp: true
+
 name: "corac"
 wandb_tags: ["predator-prey", "corac"]

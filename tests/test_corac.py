@@ -1,10 +1,13 @@
+import os
 import unittest
 from types import SimpleNamespace
 
 import torch as th
 import torch.nn.functional as F
 
+from src.controllers.dual_ree_controller import DualREEMAC
 from src.envs.matrix_game.matrix_game_repeated import Matrix_Game_Repeated_Env
+from src.learners.dual_episode_ree_q_learner import DualEpisodeREEQLearner
 from src.modules.agents.new_ree_agent import HyperREEAgent
 from src.modules.contrastive_context import ContrastiveContextLabeler
 
@@ -12,6 +15,8 @@ from src.modules.contrastive_context import ContrastiveContextLabeler
 class _Batch:
     def __init__(self, data):
         self.data = data
+        self.batch_size = data["obs"].shape[0]
+        self.max_seq_length = data["obs"].shape[1]
 
     def __getitem__(self, key):
         return self.data[key]
@@ -171,6 +176,168 @@ class HyperTwinTest(unittest.TestCase):
         for agent_id in range(2):
             reference = self._per_step(agent, bank[agent_id])[:, :, agent_id]
             self.assertTrue(th.allclose(q_all[:, :, agent_id], reference, atol=1e-5))
+
+
+class _FakeMac:
+    """Minimal MAC stand-in so the learner can be built without an env."""
+
+    def __init__(self, context_dim):
+        self.twin_agent = SimpleNamespace(context_dim=context_dim)
+        self._parameter = th.nn.Parameter(th.zeros(1))
+
+    def parameters(self):
+        return [self._parameter]
+
+    def save_models(self, path):
+        pass
+
+    def load_models(self, path):
+        pass
+
+
+def _learner_args(**overrides):
+    args = dict(
+        env="matrix_game_3", slot_number=4, n_actions=3, n_agents=2,
+        mixer=None, lr=5e-4, optim_alpha=0.99, optim_eps=1e-5,
+        grad_norm_clip=10, learner_log_interval=1000, double_q=True,
+        gamma=0.99, target_update_interval=200, kl_weight=1.0,
+        obs_last_action=True, obs_agent_id=False,
+        context_labeler="return_bins",
+        seed=0, device="cpu",
+    )
+    args.update(overrides)
+    return SimpleNamespace(**args)
+
+
+class LearnerContextChecksTest(unittest.TestCase):
+    """The CoRAC wiring must fail early and loudly, and it must persist."""
+
+    def _scheme(self):
+        return {
+            "obs": {"vshape": 1, "group": "agents"},
+            "actions": {"vshape": (1,), "group": "agents", "dtype": th.long},
+            "avail_actions": {"vshape": (3,), "group": "agents", "dtype": th.int},
+            "reward": {"vshape": (1,)},
+            "terminated": {"vshape": (1,), "dtype": th.uint8},
+        }
+
+    def test_context_dim_without_corac_labeler_fails_early(self):
+        with self.assertRaisesRegex(ValueError, "only meaningful with"):
+            DualEpisodeREEQLearner(
+                _FakeMac(4), self._scheme(), _Logger(),
+                _learner_args(context_dim=48),
+            )
+
+    def test_corac_context_dim_must_match_twin(self):
+        with self.assertRaisesRegex(ValueError, "twin agent reads contexts"):
+            DualEpisodeREEQLearner(
+                _FakeMac(4), self._scheme(), _Logger(),
+                _learner_args(context_labeler="corac", context_dim=16,
+                              corac_n_freq=8, corac_embed_dim=8),
+            )
+
+    def test_twin_target_clamp_bounds_the_bootstrap(self):
+        """The twin bootstraps with max_a' Q, which ratchets without bound when a
+        context carries little reward signal (hc_rac_audit.md, 3.1-3.2). With the
+        clamp on, no target may leave the batch's realisable return range."""
+        scheme = {
+            "obs": {"vshape": 1, "group": "agents"},
+            "actions": {"vshape": (1,), "group": "agents", "dtype": th.long},
+            "actions_onehot": {"vshape": (3,), "group": "agents"},
+            "avail_actions": {"vshape": (3,), "group": "agents", "dtype": th.int},
+            "reward": {"vshape": (1,)},
+            "terminated": {"vshape": (1,), "dtype": th.uint8},
+        }
+        actions = th.randint(0, 3, (6, 4, 2))
+        rewards = th.full((6, 4), 0.01)
+        bt, steps, n_agents = actions.shape
+        padded = th.cat([actions, th.zeros(bt, 1, n_agents, dtype=th.long)], dim=1)
+        batch = _Batch({
+            "obs": th.zeros(bt, steps + 1, n_agents, 1),
+            "actions": padded.unsqueeze(-1),
+            "actions_onehot": F.one_hot(padded, 3).float(),
+            "avail_actions": th.ones(bt, steps + 1, n_agents, 3, dtype=th.int),
+            "reward": th.cat([rewards, th.zeros(bt, 1)], dim=1).unsqueeze(-1),
+            "terminated": th.cat(
+                [th.zeros(bt, steps - 1, 1), th.ones(bt, 1, 1), th.zeros(bt, 1, 1)],
+                dim=1,
+            ),
+            "filled": th.ones(bt, steps + 1, 1, dtype=th.long),
+        })
+        ordinary = []
+        for clamp in (False, True):
+            args = _learner_args(
+                context_labeler="corac", context_dim=6, corac_n_freq=3,
+                corac_embed_dim=3, corac_n_hard=0, corac_bank_size=4,
+                twin_hyper_hidden=8, rnn_hidden_dim=8, n_actions=3, n_agents=2,
+                slot_number=4, twin_target_clamp=clamp,
+                agent="rnn", twin_agent="hyper_ree_agent",
+                mac="dual_ree_mac", action_selector="epsilon_greedy",
+                agent_output_type="q", epsilon_start=1.0, epsilon_finish=0.05,
+                epsilon_anneal_time=100,
+            )
+            mac = DualREEMAC(scheme, {"agents": 2}, args)
+            logger = _Logger()
+            learner = DualEpisodeREEQLearner(mac, scheme, logger, args)
+            # A wildly optimistic twin head: without the clamp every bootstrap
+            # target is ~gamma * 1000, far outside the episode returns (~0.04).
+            with th.no_grad():
+                mac.twin_agent.hyper_head.base_bias.fill_(1000.0)
+                learner.target_mac.twin_agent.hyper_head.base_bias.fill_(1000.0)
+            learner.train(batch, t_env=1, episode_num=0)
+            ordinary.append(logger.stats["twin_target_mean"][-1][1])
+        unclamped, clamped = ordinary
+        self.assertGreater(unclamped, 100.0)
+        self.assertLessEqual(clamped, 0.05)
+
+    def test_labeler_state_round_trips_through_checkpoints(self):
+        import tempfile
+        scheme = self._scheme()
+        args = _learner_args(context_labeler="corac", context_dim=16,
+                             corac_n_freq=8, corac_embed_dim=8,
+                             corac_segment_len=1, corac_n_hard=2,
+                             corac_bank_size=4)
+        learner = DualEpisodeREEQLearner(_FakeMac(16), scheme, _Logger(), args)
+        batch = _batch(th.randint(0, 3, (6, 4, 2)), th.randn(6, 4))
+        mask = th.ones(6, 4, 1)
+        learner.context_labeler.label(batch, mask, t_env=0)
+
+        with tempfile.TemporaryDirectory() as path:
+            learner.save_models(path)
+            self.assertTrue(os.path.exists(os.path.join(path, "context_labeler.th")))
+            restored = DualEpisodeREEQLearner(_FakeMac(16), scheme, _Logger(), args)
+            before = restored.context_labeler.support().clone()
+            restored.load_models(path)
+
+        self.assertFalse(th.equal(before, restored.context_labeler.support()))
+        for name in ("return_mean", "return_var", "bank_count"):
+            self.assertTrue(
+                th.equal(
+                    getattr(learner.context_labeler, name),
+                    getattr(restored.context_labeler, name),
+                ),
+                name,
+            )
+        self.assertTrue(
+            th.allclose(
+                learner.context_labeler.bank, restored.context_labeler.bank)
+        )
+
+
+class _Logger:
+    """Logger stub recording the scalars the learner logs."""
+
+    def __init__(self):
+        self.stats = {}
+
+    def log_stat(self, key, value, t_env):
+        self.stats.setdefault(key, []).append((t_env, value))
+
+    @property
+    def console_logger(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(info=lambda *a, **k: None,
+                               warning=lambda *a, **k: None)
 
 
 if __name__ == "__main__":

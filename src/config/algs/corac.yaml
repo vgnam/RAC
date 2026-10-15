@@ -20,4 +20,14 @@ corac_pool_size: 4096     # random candidate steps for the neighbour search
 corac_stat_momentum: 0.01
 corac_lr: 0.0005
 
+# The twin bootstraps with max_a' Q, which ratchets without bound on contexts
+# that carry little reward signal (long horizons, many actions). The shared
+# hypernetwork then spreads that inflation over the whole bank and the teacher's
+# max selects exactly those contexts. Bound the twin target and the teacher to
+# the realisable episode-return range, which is what hc_rac_method.md 4.3 claims
+# already holds but nothing enforced. Measured on a 500-step 25-action harness
+# (paper_revision/hc_rac_audit.md 3.2): twin target mean 388 -> 50, KL inf ->
+# 1.0, behaviour Q 15.0 -> 18.4 (RAC 17.4), across 3 seeds.
+twin_target_clamp: true
+
 name: "corac"

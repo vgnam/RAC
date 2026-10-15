@@ -122,6 +122,37 @@ class DualEpisodeREEQLearner:
             self.labeler_optimiser = th.optim.Adam(
                 self.context_labeler.parameters(), lr=getattr(args, 'corac_lr', 5e-4)
             )
+            if not hasattr(mac, "twin_agent") or not hasattr(mac.twin_agent, "context_dim"):
+                raise ValueError(
+                    "context_labeler='corac' needs a twin agent that reads continuous "
+                    "contexts (hyper_ree_agent or mate_entity_gru_twin), got "
+                    f"twin_agent={getattr(args, 'twin_agent', None)!r}."
+                )
+            if hasattr(mac.twin_agent, "context_dim") and int(mac.twin_agent.context_dim) != int(
+                self.context_labeler.context_dim
+            ):
+                raise ValueError(
+                    "The twin agent reads contexts of size "
+                    f"{mac.twin_agent.context_dim} but the CoRAC labeler produces "
+                    f"{self.context_labeler.context_dim} (corac_n_freq + corac_embed_dim)."
+                )
+            if bool(getattr(args, "use_context_belief", False)):
+                raise ValueError(
+                    "context_labeler='corac' replaces RAC's one-hot slots, while "
+                    "use_context_belief replaces them with belief assignments; the two "
+                    "cannot be combined."
+                )
+        else:
+            configured_context_dim = getattr(args, "context_dim", None)
+            if configured_context_dim is not None and int(configured_context_dim) != int(
+                args.slot_number
+            ):
+                raise ValueError(
+                    f"context_dim={configured_context_dim} is only meaningful with "
+                    "context_labeler='corac', but the return-bin twin expects "
+                    f"slot_number={args.slot_number} one-hot contexts. Remove context_dim "
+                    "or run with context_labeler='corac'."
+                )
 
         self.optimiser = RMSprop(params=self.params, lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
 
@@ -226,6 +257,15 @@ class DualEpisodeREEQLearner:
         else:
             teacher_context_q = counterfactual_twin_mac_out.max(dim=-1)[0]
 
+        if bool(getattr(self.args, "twin_target_clamp", False)):
+            # Keep the teacher inside the realisable return range too: the point
+            # of RAC's optimism is to prefer the best teammates seen so far, not
+            # to imitate values no episode ever reached.
+            teacher_context_q = teacher_context_q.clamp(
+                min=min(0.0, float(episode_returns.min())),
+                max=max(0.0, float(episode_returns.max())),
+            )
+
         # Use counterfactual_twin_mac_out to guide the update of mac_out.
         # Calculate the corresponding softmax action distribution, shape=(bs, max_seq_length-1, n_agents, n_actions)
         mac_q_dist = Categorical(logits=mac_out[:, :-1])
@@ -284,7 +324,18 @@ class DualEpisodeREEQLearner:
         rewards = rewards.expand(-1, -1, self.args.n_agents)       # (bs, max_seq_length-1, n_agents)
         targets = rewards + self.args.gamma * (1 - terminated) * target_max_qvals
         twin_targets = rewards + self.args.gamma * (1 - terminated) * target_twin_max_qvals
-        # print((targets == rewards).all())
+
+        if bool(getattr(self.args, "twin_target_clamp", False)):
+            # The twin bootstraps with max_a' Q, which ratchets upwards on the
+            # contexts whose episodes carry little reward signal; with continuous
+            # contexts (HC-RAC) the shared hypernetwork then spreads that
+            # inflation to the whole bank, and the teacher's max over the bank
+            # selects it. HC-RAC's stability argument (hc_rac_method.md, 4.3) is
+            # that Q(tau, a; c) is bounded by the returns of the episodes that
+            # carry c, so enforce that bound explicitly.
+            lower = min(0.0, float(episode_returns.min()))
+            upper = max(0.0, float(episode_returns.max()))
+            twin_targets = twin_targets.clamp(min=lower, max=upper)
 
         # Td-error
         td_error = (chosen_action_qvals - targets.detach())
@@ -510,6 +561,17 @@ class DualEpisodeREEQLearner:
         if self.mixer is not None:
             th.save(self.mixer.state_dict(), "{}/mixer.th".format(path))
         th.save(self.optimiser.state_dict(), "{}/opt.th".format(path))
+        if self.context_labeler is not None:
+            # The CoRAC encoder, its return statistics and the context bank all
+            # shape the contexts the twin was trained on, so they must be
+            # persisted with the Q networks.
+            th.save(
+                {
+                    "labeler": self.context_labeler.state_dict(),
+                    "optimiser": self.labeler_optimiser.state_dict(),
+                },
+                "{}/context_labeler.th".format(path),
+            )
 
     def load_models(self, path):
         self.mac.load_models(path)
@@ -518,6 +580,19 @@ class DualEpisodeREEQLearner:
         if self.mixer is not None:
             self.mixer.load_state_dict(th.load("{}/mixer.th".format(path), map_location=lambda storage, loc: storage))
         self.optimiser.load_state_dict(th.load("{}/opt.th".format(path), map_location=lambda storage, loc: storage))
+        if self.context_labeler is not None:
+            labeler_path = "{}/context_labeler.th".format(path)
+            if os.path.exists(labeler_path):
+                checkpoint = th.load(
+                    labeler_path, map_location=lambda storage, loc: storage
+                )
+                self.context_labeler.load_state_dict(checkpoint["labeler"])
+                self.labeler_optimiser.load_state_dict(checkpoint["optimiser"])
+            else:
+                self.logger.console_logger.info(
+                    "No context_labeler state in {}; the CoRAC encoder, return "
+                    "statistics and context bank restart from scratch.".format(path)
+                )
 
     def show_matrix_info(self, batch, t_env):
         mac_out = []
