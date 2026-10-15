@@ -3,6 +3,8 @@ import math
 import torch as th
 import torch.nn as nn
 
+from .new_ree_agent import ZeroDeltaHyperHead, context_q_all
+
 
 class MaskAwareEntityAttention(nn.Module):
     """Attend from the controlled camera to one typed set of visible entities."""
@@ -359,7 +361,12 @@ class MateEntityGRUAgent(nn.Module):
 
 
 class MateEntityGRUTwinAgent(MateEntityGRUAgent):
-    """Entity-GRU RAC twin with a vectorized context-conditioned Q head."""
+    """Entity-GRU RAC twin with a vectorized context-conditioned Q head.
+
+    RAC feeds one-hot slots (context_dim = slot_number) through a linear hypernet;
+    HC-RAC feeds a continuous context vector through ZeroDeltaHyperHead
+    (twin_hyper_hidden > 0).
+    """
 
     context_independent_recurrent_core = True
 
@@ -367,11 +374,19 @@ class MateEntityGRUTwinAgent(MateEntityGRUAgent):
         super().__init__(input_shape, args)
         del self.q_head
         self.slot_number = int(args.slot_number)
+        self.context_dim = int(getattr(args, "context_dim", None) or self.slot_number)
         hidden_dim = int(args.rnn_hidden_dim)
+        hyper_hidden = int(getattr(args, "twin_hyper_hidden", 0) or 0)
+        if hyper_hidden > 0:
+            self.hyper_head = ZeroDeltaHyperHead(
+                self.context_dim, hidden_dim, self.n_actions, hyper_hidden
+            )
+            return
+        self.hyper_head = None
         self.context_weight = nn.Linear(
-            self.slot_number, hidden_dim * self.n_actions
+            self.context_dim, hidden_dim * self.n_actions
         )
-        self.context_bias = nn.Linear(self.slot_number, self.n_actions)
+        self.context_bias = nn.Linear(self.context_dim, self.n_actions)
 
         if bool(getattr(args, "agent_orthogonal_init", False)):
             nn.init.orthogonal_(self.context_weight.weight, gain=1.0)
@@ -380,19 +395,25 @@ class MateEntityGRUTwinAgent(MateEntityGRUAgent):
             nn.init.zeros_(self.context_bias.bias)
 
     def init_hidden(self):
-        return self.context_bias.weight.new_zeros(
+        return next(self.parameters()).new_zeros(
             1, self.args.rnn_hidden_dim
         )
 
+    def _context_params(self, context):
+        """context (..., C) -> weight (..., H, A), bias (..., A)."""
+        if self.hyper_head is not None:
+            return self.hyper_head(context)
+        weight = self.context_weight(context).reshape(
+            *context.shape[:-1], self.args.rnn_hidden_dim, self.n_actions
+        )
+        return weight, self.context_bias(context)
+
     def _context_q(self, recurrent_output, context):
-        context = context.reshape(-1, self.slot_number)
+        context = context.reshape(-1, self.context_dim)
         recurrent_output = recurrent_output.reshape(
             -1, self.args.rnn_hidden_dim
         )
-        weights = self.context_weight(context).reshape(
-            -1, self.args.rnn_hidden_dim, self.n_actions
-        )
-        bias = self.context_bias(context)
+        weights, bias = self._context_params(context)
         return th.bmm(recurrent_output.unsqueeze(1), weights).squeeze(1) + bias
 
     def forward(self, inputs, context, hidden_state):
@@ -409,27 +430,27 @@ class MateEntityGRUTwinAgent(MateEntityGRUAgent):
         )
         return q_values, final_hidden
 
-    def _all_context_q(self, recurrent_output):
-        """Compute Q for every categorical context without re-encoding state."""
-        identity = th.eye(
-            self.slot_number,
-            device=recurrent_output.device,
-            dtype=recurrent_output.dtype,
-        )
-        weights = self.context_weight(identity).reshape(
-            self.slot_number,
-            self.args.rnn_hidden_dim,
-            self.n_actions,
-        )
-        bias = self.context_bias(identity)
-        return th.einsum("...h,kha->...ka", recurrent_output, weights) + bias
+    def _all_context_q(self, recurrent_output, contexts=None):
+        """Q for every context without re-encoding the state.
 
-    def counterfactual_step(self, inputs, hidden_state):
+        ``contexts`` defaults to all one-hot slots; it may be (M, C) shared by
+        all agents or (n_agents, M, C) per agent.
+        """
+        if contexts is None:
+            contexts = th.eye(
+                self.context_dim,
+                device=recurrent_output.device,
+                dtype=recurrent_output.dtype,
+            )
+        weights, bias = self._context_params(contexts)
+        return context_q_all(recurrent_output, weights, bias)
+
+    def counterfactual_step(self, inputs, hidden_state, contexts=None):
         recurrent_output, hidden = self.recurrent_step(inputs, hidden_state)
-        return self._all_context_q(recurrent_output), hidden
+        return self._all_context_q(recurrent_output, contexts), hidden
 
-    def counterfactual_sequence(self, inputs, hidden_state):
+    def counterfactual_sequence(self, inputs, hidden_state, contexts=None):
         recurrent_output, final_hidden = self.recurrent_sequence(
             inputs, hidden_state
         )
-        return self._all_context_q(recurrent_output), final_hidden
+        return self._all_context_q(recurrent_output, contexts), final_hidden

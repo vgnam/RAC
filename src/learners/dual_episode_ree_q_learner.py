@@ -112,7 +112,8 @@ class DualEpisodeREEQLearner:
 
         print("possible returns", self.possible_returns)
 
-        # Optional CoRAC labeler: replaces bin(R) by contrastive, return-anchored contexts.
+        # Optional CoRAC labeler: replaces one-hot bin(R) by continuous contexts
+        # [phi(R) ; trajectory-contrastive embedding] read through a hypernetwork.
         self.context_labeler = None
         if getattr(args, 'context_labeler', 'return_bins') == 'corac':
             self.context_labeler = ContrastiveContextLabeler(
@@ -166,7 +167,7 @@ class DualEpisodeREEQLearner:
 
         corac_stats = None
         if self.context_labeler is not None:
-            onehot_return_indices, _, corac_loss, corac_stats = self.context_labeler.label(
+            onehot_return_indices, corac_loss, corac_stats = self.context_labeler.label(
                 batch, mask, t_env
             )
             if corac_loss is not None:
@@ -211,7 +212,9 @@ class DualEpisodeREEQLearner:
         # This is a detached KL teacher. The selected-context twin above still
         # receives TD gradients, so a second graph here only wastes memory.
         with th.no_grad():
-            counterfactual_twin_mac_out = self.mac.counterfactual_sequence(batch)
+            # RAC: max over every one-hot slot; CoRAC: max over the bank of recent contexts.
+            bank = self.context_labeler.support() if self.context_labeler is not None else None
+            counterfactual_twin_mac_out = self.mac.counterfactual_sequence(batch, contexts=bank)
         # (bs, max_seq_length, n_agents, slot_number, n_actions)
         counterfactual_twin_mac_out = counterfactual_twin_mac_out[:, :-1].permute(0, 1, 2, 4, 3)    # (bs, max_seq_length-1, n_agents, n_actions, slot_number)
         if belief_outputs is not None:

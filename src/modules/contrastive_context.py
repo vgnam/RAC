@@ -1,21 +1,27 @@
-"""CoRAC: contrastive, return-anchored context labels for RAC.
+"""CoRAC (HC-RAC): continuous contexts for RAC through a hypernetwork.
 
-RAC labels every replay episode with ``bin(R)``, so environment luck that
-inflates the episode return leaks into the optimistic context. CoRAC instead
+RAC labels every replay episode with a one-hot ``bin(R)`` slot. Coarse slots merge
+"did nothing" with "captured prey" episodes, and the slot thresholds have to be
+tuned per environment. CoRAC instead gives every (episode, agent) a continuous
+context
 
-1. learns a segment encoder with InfoNCE whose positives are two disjoint
-   segments of the *same* episode (teammate behaviour is persistent within an
-   episode, per-step payoff noise is not) and whose hard negatives keep the
-   anchor's (observation, action) sequence but swap in the outcomes
-   (reward, observation change) of nearest neighbours from other episodes;
-2. regresses the normalised episode return from the stop-gradient episode
-   embedding, giving an estimate of E[R | persistent behaviour];
-3. turns that estimate into an ordinal context with a running empirical CDF
-   and equal-mass bins.
+    c_e = [phi(g_e) ; sg(u_e)]
 
-The luck knob ``lambda`` mixes the encoder estimate with the realised return
-before ranking: lambda = 1 is RAC with quantile bins, lambda = 0 is pure CoRAC.
-Labels are only used for training; execution is unchanged from RAC.
+* ``phi(g_e)``: cosine features of the episode return, squashed to [0, 1] with a
+  running mean/std (shared by all agents). It keeps RAC's signal, including the
+  teammate luck that lets RAC escape relative overgeneralization, at full
+  resolution and without thresholds.
+* ``u_e``: a trajectory embedding learned with Trajectory Contrastive Learning
+  (Wang et al., 2021): two windows of the same trajectory are positives; windows
+  of other trajectories and "outcome-swapped" windows (the anchor's observations
+  and actions with the outcomes of same-action neighbours from other episodes,
+  as in CORRO) are negatives. It is stop-gradient, so TD never turns it into a
+  return-to-go code.
+
+The twin Q reads c_e through a hypernetwork (``twin_hyper_hidden`` > 0); the
+optimistic teacher is the max over a bank of recent contexts. Labels are only used
+for training; execution is unchanged from RAC.
+See paper_revision/hc_rac_method.md.
 """
 
 import math
@@ -30,22 +36,23 @@ class ContrastiveContextLabeler(nn.Module):
         super().__init__()
         self.n_actions = n_actions
         self.n_agents = n_agents
-        self.slot_number = int(args.slot_number)
 
+        self.n_freq = int(getattr(args, "corac_n_freq", 16))
+        self.embed_dim = int(getattr(args, "corac_embed_dim", 32))
+        self.context_dim = self.n_freq + self.embed_dim
+        configured = getattr(args, "context_dim", None)
+        if configured is not None and int(configured) != self.context_dim:
+            raise ValueError(
+                "context_dim must equal corac_n_freq + corac_embed_dim "
+                f"({self.context_dim}), got {configured}"
+            )
         self.segment_len = int(getattr(args, "corac_segment_len", 1))
-        self.gap = int(getattr(args, "corac_gap", 0))
         self.temperature = float(getattr(args, "corac_temperature", 0.1))
         self.n_hard = int(getattr(args, "corac_n_hard", 4))
-        self.tau_plus = float(getattr(args, "corac_tau_plus", 1.0 / self.slot_number))
-        self.debias = bool(getattr(args, "corac_debias", True))
-        self.lambda_final = float(getattr(args, "corac_lambda_final", 0.0))
-        self.warmup_steps = int(getattr(args, "corac_warmup_steps", 10000))
-        self.blend_steps = int(getattr(args, "corac_blend_steps", 10000))
-        self.stat_momentum = float(getattr(args, "corac_stat_momentum", 0.01))
         self.pool_size = int(getattr(args, "corac_pool_size", 4096))
-        self.train_encoder = self.lambda_final < 1.0
+        self.stat_momentum = float(getattr(args, "corac_stat_momentum", 0.01))
+        bank_size = int(getattr(args, "corac_bank_size", 64))
 
-        embed_dim = int(getattr(args, "corac_embed_dim", 32))
         hidden_dim = int(getattr(args, "corac_hidden_dim", 64))
         proj_dim = min(obs_dim, int(getattr(args, "corac_proj_dim", 32)))
 
@@ -59,6 +66,7 @@ class ContrastiveContextLabeler(nn.Module):
             "key_proj",
             th.randn(obs_dim, proj_dim, generator=generator) / math.sqrt(proj_dim),
         )
+        self.register_buffer("frequencies", math.pi * th.arange(self.n_freq, dtype=th.float32))
 
         # x_t = [o_t, onehot(a_t), r_t, P(o_{t+1} - o_t), agent_id]
         self.n_state_features = obs_dim + n_actions
@@ -71,19 +79,14 @@ class ContrastiveContextLabeler(nn.Module):
             nn.ReLU(),
         )
         self.attention = nn.Linear(hidden_dim, 1)
-        self.output = nn.Linear(hidden_dim, embed_dim)
-        self.value_head = nn.Sequential(
-            nn.Linear(embed_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1),
-        )
+        self.output = nn.Linear(hidden_dim, self.embed_dim)
 
-        quantile_size = int(getattr(args, "corac_quantile_buffer", 4096))
-        self.register_buffer("quantile_values", th.zeros(quantile_size))
-        self.register_buffer("quantile_count", th.zeros((), dtype=th.long))
         self.register_buffer("return_mean", th.zeros(()))
         self.register_buffer("return_var", th.ones(()))
         self.register_buffer("stats_initialised", th.zeros((), dtype=th.bool))
+        # FIFO bank of recent contexts per agent: the support of the teacher's max.
+        self.register_buffer("bank", th.zeros(n_agents, bank_size, self.context_dim))
+        self.register_buffer("bank_count", th.zeros((), dtype=th.long))
 
     # ------------------------------------------------------------------ #
     # Features and encoder
@@ -123,12 +126,16 @@ class ContrastiveContextLabeler(nn.Module):
         return th.cat([segments[..., :start], outcomes, segments[..., stop:]], dim=-1)
 
     def episode_embedding(self, features, lengths):
-        """Mean embedding of non-overlapping segments, shape (bs, n_agents, d)."""
+        """Mean embedding of non-overlapping windows, shape (bs, n_agents, d).
+
+        Episodes too short for two windows (no contrastive pair) get a zero vector.
+        """
         bs, steps = features.shape[:2]
         seg = self.segment_len
         n_segments = steps // seg
+        has_pair = lengths >= 2 * seg
         if n_segments == 0:
-            return None, th.zeros(bs, dtype=th.bool, device=features.device)
+            return features.new_zeros(bs, self.n_agents, self.embed_dim)
         windows = features[:, : n_segments * seg].reshape(
             bs, n_segments, seg, self.n_agents, -1
         ).transpose(2, 3)  # (bs, n_seg, n_agents, L, F)
@@ -137,21 +144,21 @@ class ContrastiveContextLabeler(nn.Module):
         valid = (seg_ends.unsqueeze(0) <= lengths.unsqueeze(1)).float()  # (bs, n_seg)
         counts = valid.sum(dim=1).clamp(min=1.0)
         mean = (embeddings * valid.view(bs, n_segments, 1, 1)).sum(dim=1) / counts.view(bs, 1, 1)
-        return F.normalize(mean, dim=-1), valid.sum(dim=1) > 0
+        return F.normalize(mean, dim=-1) * has_pair.view(bs, 1, 1).float()
 
     # ------------------------------------------------------------------ #
-    # Contrastive objective
+    # Trajectory contrastive objective
     # ------------------------------------------------------------------ #
     def _sample_pairs(self, lengths):
-        """Sample (episode, t1, t2) with two disjoint segments of length L."""
-        seg, min_sep = self.segment_len, self.segment_len + self.gap
+        """Sample (episode, t1, t2): two disjoint windows of the same trajectory."""
+        seg = self.segment_len
         rows, t1s, t2s = [], [], []
         for b, length in enumerate(lengths.tolist()):
             last_start = int(length) - seg
-            if last_start < min_sep:
+            if last_start < seg:
                 continue
             t1 = int(th.randint(0, last_start + 1, (1,)).item())
-            candidates = [t for t in range(last_start + 1) if abs(t - t1) >= min_sep]
+            candidates = [t for t in range(last_start + 1) if abs(t - t1) >= seg]
             t2 = candidates[int(th.randint(0, len(candidates), (1,)).item())]
             rows.append(b)
             t1s.append(t1)
@@ -172,7 +179,6 @@ class ContrastiveContextLabeler(nn.Module):
         # (E, L, n_agents, F) -> (E * n_agents, L, F); row = episode-major
         anchor = features[rows_t.unsqueeze(1), idx1].transpose(1, 2).reshape(-1, seg, features.shape[-1])
         positive = features[rows_t.unsqueeze(1), idx2].transpose(1, 2).reshape(-1, seg, features.shape[-1])
-        n_rows = anchor.shape[0]
         episode_of_row = rows_t.repeat_interleave(self.n_agents)
         agent_of_row = th.arange(self.n_agents, device=device).repeat(len(rows))
 
@@ -185,7 +191,7 @@ class ContrastiveContextLabeler(nn.Module):
         pos_logit = (u * u_pos).sum(-1, keepdim=True) / self.temperature  # (N, 1)
 
         easy_logits = u @ u_pos.t() / self.temperature  # (N, N)
-        # Same-episode rows (other agents of the same episode) are not negatives.
+        # Same-episode rows (the positive, other agents of the episode) are not negatives.
         same_episode = episode_of_row.unsqueeze(0) == episode_of_row.unsqueeze(1)
         easy_logits = easy_logits.masked_fill(same_episode, float("-inf"))
 
@@ -193,29 +199,15 @@ class ContrastiveContextLabeler(nn.Module):
         if hard is not None:
             u_hard = self.encode(hard)  # (N, n_hard, d)
             hard_logits = (u.unsqueeze(1) * u_hard).sum(-1) / self.temperature
-            negatives.append(hard_logits.masked_fill(~hard_valid, float("-inf")))
-        neg_logits = th.cat(negatives, dim=1)
-
-        if self.debias:
-            # Chuang et al. (2020): correct the negative term for false negatives.
-            neg_exp = th.exp(neg_logits)
-            n_neg = th.isfinite(neg_logits).sum(dim=1).clamp(min=1).float()
-            pos_exp = th.exp(pos_logit.squeeze(1))
-            neg_mean = neg_exp.sum(dim=1) / n_neg
-            corrected = (neg_mean - self.tau_plus * pos_exp) / (1.0 - self.tau_plus)
-            corrected = th.clamp(corrected, min=math.exp(-1.0 / self.temperature))
-            loss = -(pos_logit.squeeze(1) - th.log(pos_exp + n_neg * corrected))
-        else:
-            logits = th.cat([pos_logit, neg_logits], dim=1)
-            loss = -F.log_softmax(logits, dim=1)[:, 0]
+            hard_logits = hard_logits.masked_fill(~hard_valid, float("-inf"))
+            negatives.append(hard_logits)
+        logits = th.cat([pos_logit] + negatives, dim=1)
+        loss = -F.log_softmax(logits, dim=1)[:, 0]
 
         with th.no_grad():
-            all_logits = th.cat([pos_logit, neg_logits], dim=1)
-            accuracy = (all_logits.argmax(dim=1) == 0).float().mean()
-            stats = {"corac_nce_accuracy": accuracy.item()}
+            stats = {"corac_nce_accuracy": (logits.argmax(dim=1) == 0).float().mean().item()}
             if hard is not None:
-                hard_masked = hard_logits.masked_fill(~hard_valid, float("-inf"))
-                beats_hard = (pos_logit.squeeze(1) > hard_masked.max(dim=1)[0]).float()
+                beats_hard = (pos_logit.squeeze(1) > hard_logits.max(dim=1)[0]).float()
                 stats["corac_pos_beats_hard"] = beats_hard.mean().item()
                 stats["corac_hard_valid"] = hard_valid.float().mean().item()
         return loss.mean(), stats
@@ -273,21 +265,15 @@ class ContrastiveContextLabeler(nn.Module):
         nearest_dist, nearest = th.topk(dist, k, dim=1, largest=False)  # (n_rows * L, k)
         found = th.isfinite(nearest_dist)
 
-        outcomes = pool[:, start: start + self.n_outcome_features][nearest]  # (n_rows*L, k, O)
+        outcomes = pool[:, start:stop][nearest]  # (n_rows*L, k, O)
         outcomes = outcomes.view(n_rows, seg, k, -1).transpose(1, 2)  # (n_rows, k, L, O)
         hard = self._swap_outcomes(anchor.unsqueeze(1).expand(-1, k, -1, -1), outcomes)
         valid = found.view(n_rows, seg, k).all(dim=1)
         return hard, valid
 
     # ------------------------------------------------------------------ #
-    # Return anchoring and labels
+    # Contexts
     # ------------------------------------------------------------------ #
-    def luck_weight(self, t_env):
-        if self.lambda_final >= 1.0 or t_env < self.warmup_steps:
-            return 1.0
-        progress = min(1.0, (t_env - self.warmup_steps) / max(self.blend_steps, 1))
-        return 1.0 + progress * (self.lambda_final - 1.0)
-
     def _update_return_stats(self, returns):
         mean, var = returns.mean(), returns.var(unbiased=False)
         if not bool(self.stats_initialised):
@@ -299,65 +285,43 @@ class ContrastiveContextLabeler(nn.Module):
             self.return_mean.mul_(1 - m).add_(m * mean)
             self.return_var.mul_(1 - m).add_(m * var)
 
-    def _push_quantile_values(self, values):
-        size = self.quantile_values.shape[0]
-        values = values.detach().reshape(-1)[-size:]
-        start = int(self.quantile_count) % size
-        idx = (th.arange(values.shape[0], device=values.device) + start) % size
-        self.quantile_values[idx] = values
-        self.quantile_count.add_(values.shape[0])
+    def return_features(self, returns):
+        """phi(g): cosine features of the return squashed to [0, 1], shape (..., n_freq)."""
+        z = (returns - self.return_mean) / self.return_var.clamp(min=1e-6).sqrt()
+        squashed = th.sigmoid(1.702 * z)  # ~ standard normal CDF, order preserving
+        return th.cos(squashed.unsqueeze(-1) * self.frequencies)
 
-    def _empirical_cdf(self, values):
-        filled = int(min(int(self.quantile_count), self.quantile_values.shape[0]))
-        reference = self.quantile_values[:filled]
-        below = (reference.unsqueeze(0) < values.reshape(-1, 1)).float().sum(1)
-        equal = (reference.unsqueeze(0) == values.reshape(-1, 1)).float().sum(1)
-        # Mid-rank so that tied returns share a bin.
-        return ((below + 0.5 * equal) / max(filled, 1)).view_as(values)
+    def _push_bank(self, contexts):
+        """contexts (bs, n_agents, C) -> FIFO bank (n_agents, M, C)."""
+        size = self.bank.shape[1]
+        contexts = contexts.detach().transpose(0, 1)[:, -size:]  # (n_agents, B, C)
+        start = int(self.bank_count) % size
+        idx = (th.arange(contexts.shape[1], device=contexts.device) + start) % size
+        self.bank[:, idx] = contexts
+        self.bank_count.add_(contexts.shape[1])
+
+    def support(self):
+        """Bank of recent contexts, (n_agents, M_filled, C): the support of the teacher's max."""
+        filled = int(min(int(self.bank_count), self.bank.shape[1]))
+        return self.bank[:, :filled]
 
     def label(self, batch, mask, t_env):
-        """Return one-hot contexts (bs, T+1, n_agents, K) and the auxiliary loss."""
+        """Return contexts (bs, T+1, n_agents, C), the TCL loss (or None) and stats."""
         features = self.step_features(batch)
         step_mask = mask[:, :, 0] if mask.dim() == 3 else mask
         lengths = step_mask.sum(dim=1).long()
         returns = (batch["reward"][:, :-1, 0] * step_mask).sum(dim=1)  # (bs,)
         self._update_return_stats(returns)
-        z = (returns - self.return_mean) / self.return_var.clamp(min=1e-6).sqrt()
 
-        lam = self.luck_weight(t_env)
-        aux_loss = None
-        stats = {"corac_lambda": lam}
-        values = z.unsqueeze(1).expand(-1, self.n_agents)
+        loss, stats = self.contrastive_loss(features, lengths, step_mask)
+        with th.no_grad():
+            embedding = self.episode_embedding(features, lengths)  # (bs, n_agents, d), sg
+            phi = self.return_features(returns).unsqueeze(1).expand(-1, self.n_agents, -1)
+            contexts = th.cat([phi, embedding], dim=-1)  # (bs, n_agents, C)
+        self._push_bank(contexts)
 
-        if self.train_encoder:
-            nce, nce_stats = self.contrastive_loss(features, lengths, step_mask)
-            stats.update(nce_stats)
-            with th.no_grad():
-                embedding, has_segments = self.episode_embedding(features, lengths)
-            if embedding is not None and has_segments.any():
-                prediction = self.value_head(embedding).squeeze(-1)  # (bs, n_agents)
-                target = z.unsqueeze(1).expand_as(prediction)
-                head_loss = ((prediction - target) ** 2)[has_segments].mean()
-                aux_loss = head_loss if nce is None else nce + head_loss
-                stats["corac_head_loss"] = head_loss.item()
-                if nce is not None:
-                    stats["corac_nce_loss"] = nce.item()
-                mixed = (1.0 - lam) * prediction.detach() + lam * values
-                # Episodes too short for a segment keep the realised return.
-                values = th.where(has_segments.unsqueeze(1), mixed, values)
-
-        kappa = self._empirical_cdf(values) if int(self.quantile_count) > 0 else th.full_like(values, 0.5)
-        self._push_quantile_values(values)
-        context = th.clamp((kappa * self.slot_number).long(), 0, self.slot_number - 1)
-
+        if loss is not None:
+            stats["corac_nce_loss"] = loss.item()
+        stats["corac_bank_size"] = float(min(int(self.bank_count), self.bank.shape[1]))
         steps = batch["obs"].shape[1]
-        onehot = F.one_hot(context, self.slot_number).float()  # (bs, n_agents, K)
-        onehot = onehot.unsqueeze(1).expand(-1, steps, -1, -1).contiguous()
-        stats["corac_context_entropy"] = _entropy(context, self.slot_number)
-        return onehot, context, aux_loss, stats
-
-
-def _entropy(context, slot_number):
-    counts = th.bincount(context.reshape(-1), minlength=slot_number).float()
-    probs = counts / counts.sum().clamp(min=1.0)
-    return float(-(probs * th.log(probs.clamp(min=1e-12))).sum().item())
+        return contexts.unsqueeze(1).expand(-1, steps, -1, -1).contiguous(), loss, stats

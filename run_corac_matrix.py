@@ -30,7 +30,6 @@ METHODS = {
     "IQL": ("iql", "iql"),
     "Hysteretic": ("hysteretic_q", "hysteretic_q"),
     "RAC": ("dual_iql_ree", "rac"),
-    "RAC-quantile": ("rac_quantile", "rac_quantile"),
     "CoRAC": ("corac", "corac"),
 }
 

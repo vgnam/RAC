@@ -168,16 +168,22 @@ class DualREEMAC:
 
         return twin_counter_agent_outs.view(ep_batch.batch_size, self.n_agents, self.args.slot_number, -1)
 
-    def counterfactual_sequence(self, ep_batch):
-        """Return Q-values for every context over a complete replay episode."""
+    def counterfactual_sequence(self, ep_batch, contexts=None):
+        """Return Q-values for every context over a complete replay episode.
+
+        ``contexts`` defaults to RAC's one-hot slots; HC-RAC passes its context bank,
+        (M, C) shared or (n_agents, M, C) per agent.
+        """
         if hasattr(self.twin_agent, "counterfactual_sequence"):
             inputs = self._build_sequence_inputs(ep_batch)
             outputs, self.twin_counter_hidden_states = (
                 self.twin_agent.counterfactual_sequence(
-                    inputs, self.twin_counter_hidden_states
+                    inputs, self.twin_counter_hidden_states, contexts=contexts
                 )
             )
             return outputs
+        if contexts is not None:
+            raise ValueError("Context banks need a twin agent with counterfactual_sequence")
 
         identity = th.eye(
             self.args.slot_number, device=ep_batch.device

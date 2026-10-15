@@ -5,6 +5,7 @@ import torch as th
 import torch.nn.functional as F
 
 from src.envs.matrix_game.matrix_game_repeated import Matrix_Game_Repeated_Env
+from src.modules.agents.new_ree_agent import HyperREEAgent
 from src.modules.contrastive_context import ContrastiveContextLabeler
 
 
@@ -30,9 +31,14 @@ def _batch(actions, rewards):
 
 
 def _args(**overrides):
-    args = dict(slot_number=4, seed=0, corac_segment_len=1, corac_gap=0,
-                corac_n_hard=2, corac_lambda_final=0.0, corac_warmup_steps=0,
-                corac_blend_steps=1)
+    args = dict(slot_number=4, seed=0, corac_segment_len=1, corac_n_hard=2,
+                corac_n_freq=8, corac_embed_dim=8, context_dim=16, corac_bank_size=8)
+    args.update(overrides)
+    return SimpleNamespace(**args)
+
+
+def _agent_args(**overrides):
+    args = dict(slot_number=4, rnn_hidden_dim=8, n_actions=3, agent_recurrent=True)
     args.update(overrides)
     return SimpleNamespace(**args)
 
@@ -65,35 +71,40 @@ class ContrastiveContextLabelerTest(unittest.TestCase):
         self.batch = _batch(self.actions, self.rewards)
         self.mask = th.ones(bs, steps, 1)
 
-    def test_lambda_one_ranks_by_return(self):
-        labeler = ContrastiveContextLabeler(1, 3, 2, _args(corac_lambda_final=1.0))
-        for _ in range(3):  # fill the running CDF
-            _, context, loss, _ = labeler.label(self.batch, self.mask, t_env=0)
-        self.assertIsNone(loss)
+    def test_contexts_shape_and_return_features(self):
+        labeler = ContrastiveContextLabeler(1, 3, 2, _args())
+        contexts, loss, stats = labeler.label(self.batch, self.mask, t_env=0)
+        self.assertEqual(contexts.shape, (16, 5, 2, 16))
+        self.assertTrue(th.isfinite(loss))
+        # phi(R) is shared by the agents of an episode and identical over time.
+        phi = contexts[..., :8]
+        self.assertTrue(th.equal(phi[:, :, 0], phi[:, :, 1]))
+        self.assertTrue(th.equal(phi[:, 0], phi[:, -1]))
+        # The first cosine frequency is the constant 1; the second is monotone in R.
         returns = self.rewards.sum(1)
         order = returns.argsort()
-        ranked = context[order, 0]
-        self.assertTrue(bool((ranked[1:] >= ranked[:-1]).all()))
+        second = phi[order, 0, 0, 1]
+        self.assertTrue(bool((second[1:] <= second[:-1] + 1e-6).all()))
 
-    def test_outcome_swap_keeps_state_and_action(self):
+    def test_bank_is_fifo_and_bounded(self):
+        labeler = ContrastiveContextLabeler(1, 3, 2, _args(corac_bank_size=8))
+        for _ in range(3):
+            labeler.label(self.batch, self.mask, t_env=0)
+        support = labeler.support()
+        self.assertEqual(support.shape, (2, 8, 16))
+        contexts, _, _ = labeler.label(self.batch, self.mask, t_env=0)
+        # The newest contexts are in the bank.
+        newest = contexts[-8:, 0].transpose(0, 1)  # (n_agents, 8, C)
+        self.assertTrue(th.allclose(labeler.support().sort(dim=1)[0], newest.sort(dim=1)[0]))
+
+    def test_short_episodes_get_zero_trajectory_embedding(self):
+        batch = _batch(self.actions[:, :1], self.rewards[:, :1])
         labeler = ContrastiveContextLabeler(1, 3, 2, _args())
-        features = labeler.step_features(self.batch)
-        anchor = features[:2, :1].transpose(1, 2).reshape(-1, 1, features.shape[-1])
-        episode_of_row = th.tensor([0, 0, 1, 1])
-        agent_of_row = th.tensor([0, 1, 0, 1])
-        hard, valid = labeler._outcome_swapped_negatives(
-            features, self.mask[:, :, 0], anchor, episode_of_row, agent_of_row
-        )
-        n_state = labeler.n_state_features
-        self.assertTrue(valid.all())
-        state_part = hard[..., :n_state]
-        self.assertTrue(th.equal(state_part, anchor[:, None, :, :n_state].expand_as(state_part)))
-        # Agent-id block is untouched as well.
-        id_start = n_state + labeler.n_outcome_features
-        self.assertTrue(th.equal(hard[..., id_start:], anchor[:, None, :, id_start:].expand_as(hard[..., id_start:])))
+        contexts, loss, _ = labeler.label(batch, self.mask[:, :1], t_env=0)
+        self.assertIsNone(loss)  # no two disjoint windows in a 1-step episode
+        self.assertTrue(th.equal(contexts[..., 8:], th.zeros_like(contexts[..., 8:])))
 
-    def test_outcome_swap_never_reproduces_anchor(self):
-        # Discrete payoffs: most same-action neighbours share the anchor's reward.
+    def test_outcome_swap_keeps_state_and_never_reproduces_anchor(self):
         rewards = th.randint(0, 2, (16, 4)).float()
         batch = _batch(self.actions, rewards)
         labeler = ContrastiveContextLabeler(1, 3, 2, _args(corac_n_hard=4))
@@ -106,21 +117,60 @@ class ContrastiveContextLabelerTest(unittest.TestCase):
         )
         start = labeler.n_state_features
         stop = start + labeler.n_outcome_features
+        self.assertTrue(bool(valid.any()))
+        state_part = hard[..., :start]
+        self.assertTrue(th.equal(state_part, anchor[:, None, :, :start].expand_as(state_part)))
         same = (hard[..., start:stop] == anchor[:, None, :, start:stop]).all(-1).all(-1)
         self.assertFalse(bool((same & valid).any()))
-        self.assertTrue(bool(valid.any()))
 
-    def test_corac_trains_and_returns_valid_contexts(self):
-        labeler = ContrastiveContextLabeler(1, 3, 2, _args())
-        optimiser = th.optim.Adam(labeler.parameters(), lr=1e-3)
-        onehot, context, loss, stats = labeler.label(self.batch, self.mask, t_env=10)
-        self.assertEqual(onehot.shape, (16, 5, 2, 4))
-        self.assertTrue(th.isfinite(loss))
-        optimiser.zero_grad()
-        loss.backward()
-        optimiser.step()
-        self.assertTrue(((context >= 0) & (context < 4)).all())
-        self.assertIn("corac_nce_accuracy", stats)
+
+class HyperTwinTest(unittest.TestCase):
+    def setUp(self):
+        th.manual_seed(0)
+        self.inputs = th.randn(2, 3, 2, 5)  # (bs, T, n_agents, F)
+
+    def _per_step(self, agent, contexts):
+        """Reference: run forward() step by step for each context."""
+        bs, steps, n_agents, _ = self.inputs.shape
+        out = []
+        for c in contexts:
+            h = agent.init_hidden().expand(bs * n_agents, -1)
+            qs = []
+            for t in range(steps):
+                q, h = agent(self.inputs[:, t].reshape(bs * n_agents, -1),
+                             c.expand(bs * n_agents, -1), h)
+                qs.append(q.view(bs, n_agents, -1))
+            out.append(th.stack(qs, dim=1))
+        return th.stack(out, dim=3)  # (bs, T, n_agents, M, A)
+
+    def test_rac_slots_unchanged(self):
+        agent = HyperREEAgent(5, _agent_args())
+        hidden = agent.init_hidden().expand(2, 2, -1)
+        q_all, _ = agent.counterfactual_sequence(self.inputs, hidden)
+        reference = self._per_step(agent, th.eye(4))
+        self.assertTrue(th.allclose(q_all, reference, atol=1e-5))
+
+    def test_context_bank_matches_forward_and_starts_without_optimism(self):
+        agent = HyperREEAgent(5, _agent_args(context_dim=6, twin_hyper_hidden=16))
+        contexts = th.randn(5, 6)
+        hidden = agent.init_hidden().expand(2, 2, -1)
+        q_all, _ = agent.counterfactual_sequence(self.inputs, hidden, contexts=contexts)
+        self.assertEqual(q_all.shape, (2, 3, 2, 5, 3))
+        self.assertTrue(th.allclose(q_all, self._per_step(agent, contexts), atol=1e-5))
+        # Zero-delta init: every context shares the base head at the start.
+        self.assertTrue(th.allclose(q_all, q_all[..., :1, :].expand_as(q_all)))
+
+    def test_per_agent_bank(self):
+        agent = HyperREEAgent(5, _agent_args(context_dim=6, twin_hyper_hidden=16))
+        with th.no_grad():
+            agent.hyper_head.delta[-1].weight.normal_()
+        bank = th.randn(2, 4, 6)  # (n_agents, M, C)
+        hidden = agent.init_hidden().expand(2, 2, -1)
+        q_all, _ = agent.counterfactual_sequence(self.inputs, hidden, contexts=bank)
+        self.assertEqual(q_all.shape, (2, 3, 2, 4, 3))
+        for agent_id in range(2):
+            reference = self._per_step(agent, bank[agent_id])[:, :, agent_id]
+            self.assertTrue(th.allclose(q_all[:, :, agent_id], reference, atol=1e-5))
 
 
 if __name__ == "__main__":
