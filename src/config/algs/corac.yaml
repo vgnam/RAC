@@ -6,9 +6,16 @@
 extends: dual_iql_ree
 
 context_labeler: "corac"
+# The context is [phi(return) ; trajectory embedding]. Pick which halves are
+# active: both (default), (a) return only, or (b) trajectory only. context_dim is
+# derived from the flags (n_freq + embed_dim of the enabled halves), so an
+# ablation is a one-line change:
+#   corac_use_return: false      # hc_rac_method.md 5 ablation (b)
+#   corac_use_trajectory: false  # ablation (a): "continuous RAC", also much faster
+corac_use_return: true
+corac_use_trajectory: true
 corac_n_freq: 16          # cosine features of the return
 corac_embed_dim: 32       # trajectory embedding (TCL)
-context_dim: 48           # = corac_n_freq + corac_embed_dim
 twin_hyper_hidden: 64     # hypernetwork hidden width (zero-delta init)
 corac_bank_size: 64       # contexts per agent the teacher maximises over
 corac_segment_len: 1      # steps per window (view)

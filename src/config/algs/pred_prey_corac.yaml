@@ -4,9 +4,11 @@
 extends: pred_prey_rac
 
 context_labeler: "corac"
+corac_use_return: true
+corac_use_trajectory: true
 corac_n_freq: 16
 corac_embed_dim: 32
-context_dim: 48
+# context_dim is derived from the two flags above (see corac.yaml).
 twin_hyper_hidden: 64
 corac_bank_size: 64
 corac_segment_len: 8      # steps per window; episodes are 200 steps

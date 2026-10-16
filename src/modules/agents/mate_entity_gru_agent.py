@@ -3,7 +3,7 @@ import math
 import torch as th
 import torch.nn as nn
 
-from .new_ree_agent import ZeroDeltaHyperHead, context_q_all
+from .new_ree_agent import ZeroDeltaHyperHead, context_q_all, _twin_context_dim
 
 
 class MaskAwareEntityAttention(nn.Module):
@@ -374,7 +374,7 @@ class MateEntityGRUTwinAgent(MateEntityGRUAgent):
         super().__init__(input_shape, args)
         del self.q_head
         self.slot_number = int(args.slot_number)
-        self.context_dim = int(getattr(args, "context_dim", None) or self.slot_number)
+        self.context_dim = _twin_context_dim(args)
         hidden_dim = int(args.rnn_hidden_dim)
         hyper_hidden = int(getattr(args, "twin_hyper_hidden", 0) or 0)
         if hyper_hidden > 0:

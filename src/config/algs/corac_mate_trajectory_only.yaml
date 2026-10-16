@@ -1,0 +1,16 @@
+# HC-RAC ablation (b) for MATE: trajectory embedding only, no return features.
+#
+# The context is the 32-dim TCL embedding alone, i.e. CoRAC without the return
+# anchor that lets RAC escape relative overgeneralization (hc_rac_method.md 0,
+# which is also why the old CoRAC lambda=0 failed on Predator-Prey). Kept as an
+# ablation because the method doc asks for it, not as a recommended setting.
+#
+#   python src/main.py --env-config mate_belief_entity_gru_4v8_0 \
+#     --config corac_mate_trajectory_only --max-steps 500000 with seed=0 ...
+extends: corac_mate
+
+corac_use_return: false
+corac_use_trajectory: true
+
+name: "corac_mate_trajectory_only"
+wandb_tags: ["mate", "hcrac", "ablation-trajectory-only"]

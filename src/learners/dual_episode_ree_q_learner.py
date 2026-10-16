@@ -119,8 +119,15 @@ class DualEpisodeREEQLearner:
             self.context_labeler = ContrastiveContextLabeler(
                 scheme["obs"]["vshape"], args.n_actions, args.n_agents, args
             )
-            self.labeler_optimiser = th.optim.Adam(
-                self.context_labeler.parameters(), lr=getattr(args, 'corac_lr', 5e-4)
+            # The return-only ablation (corac_use_trajectory=false) has no trainable
+            # labeler parameters, so there is nothing for an optimiser to hold.
+            labeler_parameters = list(self.context_labeler.parameters())
+            self.labeler_optimiser = (
+                th.optim.Adam(
+                    labeler_parameters, lr=getattr(args, 'corac_lr', 5e-4)
+                )
+                if labeler_parameters
+                else None
             )
             if not hasattr(mac, "twin_agent") or not hasattr(mac.twin_agent, "context_dim"):
                 raise ValueError(
@@ -206,7 +213,6 @@ class DualEpisodeREEQLearner:
                 corac_loss.backward()
                 th.nn.utils.clip_grad_norm_(self.context_labeler.parameters(), self.args.grad_norm_clip)
                 self.labeler_optimiser.step()
-
         belief_outputs = None
         belief_losses = None
         teacher_diagnostics = None
@@ -595,7 +601,11 @@ class DualEpisodeREEQLearner:
             th.save(
                 {
                     "labeler": self.context_labeler.state_dict(),
-                    "optimiser": self.labeler_optimiser.state_dict(),
+                    "optimiser": (
+                        self.labeler_optimiser.state_dict()
+                        if self.labeler_optimiser is not None
+                        else None
+                    ),
                 },
                 "{}/context_labeler.th".format(path),
             )
@@ -614,7 +624,11 @@ class DualEpisodeREEQLearner:
                     labeler_path, map_location=lambda storage, loc: storage
                 )
                 self.context_labeler.load_state_dict(checkpoint["labeler"])
-                self.labeler_optimiser.load_state_dict(checkpoint["optimiser"])
+                if (
+                    self.labeler_optimiser is not None
+                    and checkpoint.get("optimiser") is not None
+                ):
+                    self.labeler_optimiser.load_state_dict(checkpoint["optimiser"])
             else:
                 self.logger.console_logger.info(
                     "No context_labeler state in {}; the CoRAC encoder, return "

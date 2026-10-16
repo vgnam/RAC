@@ -2,6 +2,17 @@ import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ..contrastive_context import corac_context_dim
+
+
+def _twin_context_dim(args):
+    """Context width: CoRAC derives it from the enabled halves, RAC uses slots."""
+    if str(getattr(args, "context_labeler", "return_bins")) == "corac":
+        default = corac_context_dim(args)
+    else:
+        default = args.slot_number
+    return int(getattr(args, "context_dim", None) or default)
+
 
 # We consider two possible implementations of this agent, hyper-net, or input return_slot_index into fc_2
 # These two implementations are proposed to deal with obs with high dimensions.
@@ -143,8 +154,9 @@ class HyperREEAgent(nn.Module):
         super(HyperREEAgent, self).__init__()
         self.args = args
         self.slot_number = args.slot_number
-        # RAC: one-hot slots (context_dim = slot_number); HC-RAC: continuous context vector.
-        self.context_dim = int(getattr(args, "context_dim", None) or args.slot_number)
+        # RAC: one-hot slots (context_dim = slot_number); HC-RAC: continuous context
+        # vector whose width follows from corac_use_return / corac_use_trajectory.
+        self.context_dim = _twin_context_dim(args)
         self.recurrent = bool(getattr(args, "agent_recurrent", True))
 
         self.encoder, self.fc1, rnn_input_dim = _build_encoder(input_shape, args)

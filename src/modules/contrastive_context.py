@@ -31,20 +31,51 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def corac_context_parts(args):
+    """Which halves of the CoRAC context are enabled, and their dimensions.
+
+    hc_rac_method.md 5 asks for the (a) phi(g)-only, (b) u-only, (c) both
+    ablation; (c) not beating (a) retires u entirely. ``corac_use_return`` and
+    ``corac_use_trajectory`` select the halves, and the context width follows
+    from them, so an ablation is a one-flag change.
+    """
+    use_return = bool(getattr(args, "corac_use_return", True))
+    use_trajectory = bool(getattr(args, "corac_use_trajectory", True))
+    if not (use_return or use_trajectory):
+        raise ValueError(
+            "CoRAC needs at least one context half: enable corac_use_return "
+            "and/or corac_use_trajectory."
+        )
+    n_freq = int(getattr(args, "corac_n_freq", 16)) if use_return else 0
+    embed_dim = int(getattr(args, "corac_embed_dim", 32)) if use_trajectory else 0
+    return use_return, use_trajectory, n_freq, embed_dim
+
+
+def corac_context_dim(args):
+    """Width of the CoRAC context vector implied by the enabled halves."""
+    return corac_context_parts(args)[2] + corac_context_parts(args)[3]
+
+
 class ContrastiveContextLabeler(nn.Module):
     def __init__(self, obs_dim, n_actions, n_agents, args):
         super().__init__()
         self.n_actions = n_actions
         self.n_agents = n_agents
 
-        self.n_freq = int(getattr(args, "corac_n_freq", 16))
-        self.embed_dim = int(getattr(args, "corac_embed_dim", 32))
+        (
+            self.use_return,
+            self.use_trajectory,
+            self.n_freq,
+            self.embed_dim,
+        ) = corac_context_parts(args)
         self.context_dim = self.n_freq + self.embed_dim
         configured = getattr(args, "context_dim", None)
         if configured is not None and int(configured) != self.context_dim:
             raise ValueError(
-                "context_dim must equal corac_n_freq + corac_embed_dim "
-                f"({self.context_dim}), got {configured}"
+                "context_dim must equal the enabled context halves "
+                f"(corac_n_freq + corac_embed_dim = {self.context_dim}), got "
+                f"{configured}. Drop context_dim (it is derived) or fix the "
+                "corac_use_return / corac_use_trajectory flags."
             )
         self.segment_len = int(getattr(args, "corac_segment_len", 1))
         self.temperature = float(getattr(args, "corac_temperature", 0.1))
@@ -68,20 +99,26 @@ class ContrastiveContextLabeler(nn.Module):
             "key_proj",
             th.randn(obs_dim, proj_dim, generator=generator) / math.sqrt(proj_dim),
         )
-        self.register_buffer("frequencies", math.pi * th.arange(self.n_freq, dtype=th.float32))
-
-        # x_t = [o_t, onehot(a_t), r_t, P(o_{t+1} - o_t), agent_id]
-        self.n_state_features = obs_dim + n_actions
-        self.n_outcome_features = 1 + proj_dim
-        step_dim = self.n_state_features + self.n_outcome_features + n_agents
-        self.step_net = nn.Sequential(
-            nn.Linear(step_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
+        self.register_buffer(
+            "frequencies", math.pi * th.arange(self.n_freq, dtype=th.float32)
         )
-        self.attention = nn.Linear(hidden_dim, 1)
-        self.output = nn.Linear(hidden_dim, self.embed_dim)
+
+        self.step_net = None
+        self.attention = None
+        self.output = None
+        if self.use_trajectory:
+            # x_t = [o_t, onehot(a_t), r_t, P(o_{t+1} - o_t), agent_id]
+            self.n_state_features = obs_dim + n_actions
+            self.n_outcome_features = 1 + proj_dim
+            step_dim = self.n_state_features + self.n_outcome_features + n_agents
+            self.step_net = nn.Sequential(
+                nn.Linear(step_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU(),
+            )
+            self.attention = nn.Linear(hidden_dim, 1)
+            self.output = nn.Linear(hidden_dim, self.embed_dim)
 
         self.register_buffer("return_mean", th.zeros(()))
         self.register_buffer("return_var", th.ones(()))
@@ -329,17 +366,29 @@ class ContrastiveContextLabeler(nn.Module):
 
     def label(self, batch, mask, t_env):
         """Return contexts (bs, T+1, n_agents, C), the TCL loss (or None) and stats."""
-        features = self.step_features(batch)
         step_mask = mask[:, :, 0] if mask.dim() == 3 else mask
         lengths = step_mask.sum(dim=1).long()
         returns = (batch["reward"][:, :-1, 0] * step_mask).sum(dim=1)  # (bs,)
         self._update_return_stats(returns)
 
-        loss, stats = self.contrastive_loss(features, lengths, step_mask)
+        loss, stats = None, {}
+        features = None
+        if self.use_trajectory:
+            features = self.step_features(batch)
+            loss, stats = self.contrastive_loss(features, lengths, step_mask)
+
         with th.no_grad():
-            embedding = self.episode_embedding(features, lengths)  # (bs, n_agents, d), sg
-            phi = self.return_features(returns).unsqueeze(1).expand(-1, self.n_agents, -1)
-            contexts = th.cat([phi, embedding], dim=-1)  # (bs, n_agents, C)
+            parts = []
+            if self.use_return:
+                phi = self.return_features(returns).unsqueeze(1).expand(
+                    -1, self.n_agents, -1
+                )
+                parts.append(phi)
+            if self.use_trajectory:
+                # (bs, n_agents, d), stop-gradient
+                embedding = self.episode_embedding(features, lengths)
+                parts.append(embedding)
+            contexts = parts[0] if len(parts) == 1 else th.cat(parts, dim=-1)
         self._push_bank(contexts)
 
         if loss is not None:
@@ -350,7 +399,11 @@ class ContrastiveContextLabeler(nn.Module):
         # weight that only feeds noise into the teacher's max over the bank.
         stats["corac_return_mean"] = float(self.return_mean)
         stats["corac_return_std"] = float(self._effective_std())
-        stats["corac_phi_saturated"] = float((phi.abs() > 0.999).float().mean())
-        stats["corac_embed_batch_std"] = float(embedding.std(dim=0).mean())
+        stats["corac_phi_saturated"] = (
+            float((phi.abs() > 0.999).float().mean()) if self.use_return else 0.0
+        )
+        stats["corac_embed_batch_std"] = (
+            float(embedding.std(dim=0).mean()) if self.use_trajectory else 0.0
+        )
         steps = batch["obs"].shape[1]
         return contexts.unsqueeze(1).expand(-1, steps, -1, -1).contiguous(), loss, stats

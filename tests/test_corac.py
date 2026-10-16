@@ -382,5 +382,93 @@ class _Logger:
                                warning=lambda *a, **k: None)
 
 
+class ContextAblationTest(unittest.TestCase):
+    """hc_rac_method.md 5: (a) phi(g) only, (b) u only, (c) both."""
+
+    def setUp(self):
+        th.manual_seed(0)
+        actions = th.randint(0, 3, (16, 4, 2))
+        rewards = th.randn(16, 4)
+        self.batch = _batch(actions, rewards)
+        self.mask = th.ones(16, 4, 1)
+
+    def test_return_only_needs_no_encoder_and_no_tcl_loss(self):
+        labeler = ContrastiveContextLabeler(
+            1, 3, 2, _args(context_dim=None, corac_use_trajectory=False)
+        )
+        self.assertEqual(labeler.context_dim, 8)  # corac_n_freq only
+        self.assertIsNone(labeler.output)
+        contexts, loss, stats = labeler.label(self.batch, self.mask, t_env=0)
+        self.assertEqual(contexts.shape, (16, 5, 2, 8))
+        self.assertIsNone(loss)  # no trajectory half, nothing contrastive to train
+        self.assertEqual(stats["corac_embed_batch_std"], 0.0)
+        # phi is the whole context: shared by agents, constant over time.
+        self.assertTrue(th.equal(contexts[:, 0], contexts[:, -1]))
+        self.assertTrue(th.equal(contexts[:, 0, 0], contexts[:, 0, 1]))
+
+    def test_trajectory_only_context_matches_the_embedding(self):
+        labeler = ContrastiveContextLabeler(
+            1, 3, 2, _args(context_dim=None, corac_use_return=False)
+        )
+        self.assertEqual(labeler.context_dim, 8)  # corac_embed_dim only
+        contexts, loss, stats = labeler.label(self.batch, self.mask, t_env=0)
+        self.assertEqual(contexts.shape, (16, 5, 2, 8))
+        self.assertIsNotNone(loss)
+        with th.no_grad():
+            features = labeler.step_features(self.batch)
+            embedding = labeler.episode_embedding(features, th.full((16,), 4))
+        self.assertTrue(th.allclose(contexts[:, 0], embedding, atol=1e-6))
+        self.assertEqual(stats["corac_phi_saturated"], 0.0)
+        self.assertGreater(stats["corac_embed_batch_std"], 0.0)
+
+    def test_no_context_half_enabled_fails_early(self):
+        with self.assertRaisesRegex(ValueError, "at least one context half"):
+            ContrastiveContextLabeler(
+                1, 3, 2,
+                _args(context_dim=None, corac_use_return=False,
+                      corac_use_trajectory=False),
+            )
+
+    def test_derived_context_dim_reaches_both_labeler_and_twin(self):
+        """An ablation must be a one-flag change: no context_dim to keep in sync."""
+        scheme = {
+            "obs": {"vshape": 1, "group": "agents"},
+            "actions": {"vshape": (1,), "group": "agents", "dtype": th.long},
+            "actions_onehot": {"vshape": (3,), "group": "agents"},
+            "avail_actions": {"vshape": (3,), "group": "agents", "dtype": th.int},
+            "reward": {"vshape": (1,)},
+            "terminated": {"vshape": (1,), "dtype": th.uint8},
+        }
+        bt, steps, n_agents = 6, 4, 2
+        actions = th.randint(0, 3, (bt, steps, n_agents))
+        padded = th.cat([actions, th.zeros(bt, 1, n_agents, dtype=th.long)], dim=1)
+        batch = _Batch({
+            "obs": th.zeros(bt, steps + 1, n_agents, 1),
+            "actions": padded.unsqueeze(-1),
+            "actions_onehot": F.one_hot(padded, 3).float(),
+            "avail_actions": th.ones(bt, steps + 1, n_agents, 3, dtype=th.int),
+            "reward": th.cat([th.rand(bt, steps), th.zeros(bt, 1)], dim=1).unsqueeze(-1),
+            "terminated": th.cat(
+                [th.zeros(bt, steps - 1, 1), th.ones(bt, 1, 1), th.zeros(bt, 1, 1)],
+                dim=1,
+            ),
+            "filled": th.ones(bt, steps + 1, 1, dtype=th.long),
+        })
+        args = _learner_args(
+            context_labeler="corac", corac_use_return=True,
+            corac_use_trajectory=False, corac_n_freq=3, corac_embed_dim=3,
+            twin_hyper_hidden=8, rnn_hidden_dim=8, agent="rnn",
+            twin_agent="hyper_ree_agent", mac="dual_ree_mac",
+            action_selector="epsilon_greedy", agent_output_type="q",
+            epsilon_start=1.0, epsilon_finish=0.05, epsilon_anneal_time=100,
+        )
+        self.assertFalse(hasattr(args, "context_dim"))
+        mac = DualREEMAC(scheme, {"agents": 2}, args)
+        self.assertEqual(mac.twin_agent.context_dim, 3)
+        learner = DualEpisodeREEQLearner(mac, scheme, _Logger(), args)
+        self.assertEqual(learner.context_labeler.context_dim, 3)
+        learner.train(batch, t_env=1, episode_num=0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -27,6 +27,36 @@ python src/main.py --env-config mate_entity_gru --config iql ...
 `corac_mate` kế thừa `corac`, nên tự có `twin_target_clamp: true` (xem
 `paper_revision/hc_rac_audit.md` §3.2, §4.1) và `corac_min_std_frac: 0.05`.
 
+## Ablation context: return-only vs trajectory-only
+
+Context của HC-RAC là `[φ(g) ; ū]`; hai nhánh bật/tắt độc lập bằng
+`corac_use_return` / `corac_use_trajectory`, và **`context_dim` được suy ra** từ chúng
+(không cần khai báo, không sợ lệch với twin):
+
+| Preset | Context | Chiều | Ghi chú |
+|---|---|---|---|
+| `corac_mate` | `[φ(g) ; ū]` | 48 | mặc định |
+| `corac_mate_return_only` | chỉ `φ(g)` | 16 | "RAC liên tục"; **không dựng encoder TCL** nên rẻ hơn hẳn |
+| `corac_mate_trajectory_only` | chỉ `ū` | 32 | tương đương CoRAC λ=0 cũ — đã thất bại trên Predator-Prey |
+
+```bash
+# ablation (a): chỉ return
+python src/main.py --env-config mate_belief_entity_gru_4v8_0 \
+  --config corac_mate_return_only --max-steps 500000 with seed=0 ...
+
+# ablation (b): chỉ trajectory
+python src/main.py --env-config mate_belief_entity_gru_4v8_0 \
+  --config corac_mate_trajectory_only --max-steps 500000 with seed=0 ...
+```
+
+Với env khác chỉ cần một dòng override, ví dụ trên `pred_prey_corac`:
+`with corac_use_trajectory=false`.
+
+`hc_rac_method.md` §5 lấy đây làm **tiêu chí dừng**: nếu (c) `[φ;ū]` không hơn (a) chỉ `φ`
+ở bất kỳ env nào thì bỏ `ū`. Chỉ số để phán: `corac_embed_batch_std` — nếu ~0 thì `ū` gần
+như hằng số giữa các episode, tức nhánh trajectory đang chết và nên bỏ.
+
+
 ## Checklist cho run mới (so với run HCRAC-L16 cũ)
 
 **Bắt buộc — nếu thiếu thì kết quả không so sánh được:**

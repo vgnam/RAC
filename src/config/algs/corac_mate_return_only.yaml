@@ -1,0 +1,18 @@
+# HC-RAC ablation (a) for MATE: phi(g) only, no trajectory half.
+#
+# "Continuous RAC": the context is the 16 cosine return features alone, so the
+# TCL encoder is not built at all (cheaper: no 500-window encode, no neighbour
+# search) and the labeler has no trainable parameters.
+#
+# hc_rac_method.md 5 makes this the stopping criterion: if phi(g)+u does not beat
+# phi(g) alone on any environment, the trajectory half should be dropped.
+#
+#   python src/main.py --env-config mate_belief_entity_gru_4v8_0 \
+#     --config corac_mate_return_only --max-steps 500000 with seed=0 ...
+extends: corac_mate
+
+corac_use_return: true
+corac_use_trajectory: false
+
+name: "corac_mate_return_only"
+wandb_tags: ["mate", "hcrac", "ablation-return-only"]

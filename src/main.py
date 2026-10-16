@@ -189,6 +189,8 @@ if __name__ == '__main__':
             'pred_prey_lucvar_iql',
             'corac',
             'corac_mate',
+            'corac_mate_return_only',
+            'corac_mate_trajectory_only',
             'pred_prey_corac',
             'lucvar_iql',
         ],

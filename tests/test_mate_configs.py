@@ -30,8 +30,28 @@ def test_corac_mate_preset_is_consistent():
     assert alg["context_labeler"] == "corac"
     assert alg["corac_segment_len"] == 16  # 500-step episodes need real windows
     assert alg["twin_target_clamp"] is True
-    assert alg["context_dim"] == alg["corac_n_freq"] + alg["corac_embed_dim"]
+    assert alg["corac_min_std_frac"] == 0.05
+    assert alg["corac_use_return"] is True and alg["corac_use_trajectory"] is True
+    # context_dim is derived from the halve flags, so it must not be pinned here.
+    assert "context_dim" not in alg
     # The env preset is still the one that picks the camera-entity twin.
     assert env["agent"] == "mate_entity_gru"
     assert env["twin_agent"] == "mate_entity_gru_twin"
     assert env["mate_num_obstacles"] == 0
+
+
+def test_corac_mate_ablations_flip_one_flag_each():
+    return_only = _load_config("corac_mate_return_only", "algs")
+    assert return_only["corac_use_return"] is True
+    assert return_only["corac_use_trajectory"] is False
+    assert return_only["corac_segment_len"] == 16  # inherited from corac_mate
+
+    trajectory_only = _load_config("corac_mate_trajectory_only", "algs")
+    assert trajectory_only["corac_use_return"] is False
+    assert trajectory_only["corac_use_trajectory"] is True
+
+    from src.modules.contrastive_context import corac_context_dim
+    from types import SimpleNamespace
+
+    assert corac_context_dim(SimpleNamespace(**return_only)) == return_only["corac_n_freq"]
+    assert corac_context_dim(SimpleNamespace(**trajectory_only)) == trajectory_only["corac_embed_dim"]
