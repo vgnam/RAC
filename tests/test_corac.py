@@ -109,6 +109,32 @@ class ContrastiveContextLabelerTest(unittest.TestCase):
         self.assertIsNone(loss)  # no two disjoint windows in a 1-step episode
         self.assertTrue(th.equal(contexts[..., 8:], th.zeros_like(contexts[..., 8:])))
 
+    def test_return_std_floor_keeps_phi_informative_when_returns_concentrate(self):
+        """MATE late training: return level ~500, batch spread ~10.
+
+        Without a floor relative to the level, z explodes and phi collapses into
+        a constant binary code, so every context looks the same.
+        """
+        saturations = {}
+        for min_std_frac in (0.0, 0.05):
+            labeler = ContrastiveContextLabeler(
+                1, 3, 2, _args(corac_min_std_frac=min_std_frac)
+            )
+            with th.no_grad():
+                labeler.return_mean.fill_(500.0)
+                labeler.return_var.fill_(1e-8)  # collapsed EMA spread
+                labeler.stats_initialised.fill_(True)
+            returns = th.tensor([490.0, 500.0, 510.0])
+            phi = labeler.return_features(returns)
+            saturations[min_std_frac] = float((phi.abs() > 0.999).float().mean())
+            # Return ordering must survive the floor.
+            self.assertLessEqual(phi[2, 1].item(), phi[0, 1].item() + 1e-6)
+
+        # No floor: z is ~1e4, sigmoid saturates to {0, 0.5, 1} and phi becomes a
+        # binary code. With the floor phi stays a smooth, order preserving code.
+        self.assertGreater(saturations[0.0], 0.8)
+        self.assertLess(saturations[0.05], 0.5)
+
     def test_pair_sampler_handles_episodes_holding_barely_two_windows(self):
         """length == 2 * segment_len: interior starts have no disjoint partner.
 

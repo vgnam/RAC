@@ -51,6 +51,8 @@ class ContrastiveContextLabeler(nn.Module):
         self.n_hard = int(getattr(args, "corac_n_hard", 4))
         self.pool_size = int(getattr(args, "corac_pool_size", 4096))
         self.stat_momentum = float(getattr(args, "corac_stat_momentum", 0.01))
+        # 0 disables the relative floor (historical behaviour); MATE uses 0.05.
+        self.min_std_frac = float(getattr(args, "corac_min_std_frac", 0.0))
         bank_size = int(getattr(args, "corac_bank_size", 64))
 
         hidden_dim = int(getattr(args, "corac_hidden_dim", 64))
@@ -291,9 +293,23 @@ class ContrastiveContextLabeler(nn.Module):
             self.return_mean.mul_(1 - m).add_(m * mean)
             self.return_var.mul_(1 - m).add_(m * var)
 
+    def _effective_std(self):
+        """Spread used to standardise the return.
+
+        The EMA variance only has an absolute floor, so when the returns of a
+        batch sit inside a narrow band (late MATE training: level ~500, spread
+        ~10-20) z explodes and phi saturates into a binary code, losing the
+        continuous resolution the context is supposed to carry. A floor relative
+        to the return level keeps z bounded while staying order preserving.
+        """
+        std = self.return_var.clamp(min=1e-6).sqrt()
+        if self.min_std_frac > 0.0:
+            std = th.maximum(std, self.min_std_frac * self.return_mean.abs() + 1e-3)
+        return std
+
     def return_features(self, returns):
         """phi(g): cosine features of the return squashed to [0, 1], shape (..., n_freq)."""
-        z = (returns - self.return_mean) / self.return_var.clamp(min=1e-6).sqrt()
+        z = (returns - self.return_mean) / self._effective_std()
         squashed = th.sigmoid(1.702 * z)  # ~ standard normal CDF, order preserving
         return th.cos(squashed.unsqueeze(-1) * self.frequencies)
 
@@ -333,7 +349,7 @@ class ContrastiveContextLabeler(nn.Module):
         # its resolution, and a batch-constant u means the TCL half is dead
         # weight that only feeds noise into the teacher's max over the bank.
         stats["corac_return_mean"] = float(self.return_mean)
-        stats["corac_return_std"] = float(self.return_var.clamp(min=1e-6).sqrt())
+        stats["corac_return_std"] = float(self._effective_std())
         stats["corac_phi_saturated"] = float((phi.abs() > 0.999).float().mean())
         stats["corac_embed_batch_std"] = float(embedding.std(dim=0).mean())
         steps = batch["obs"].shape[1]

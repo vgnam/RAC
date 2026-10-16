@@ -16,5 +16,12 @@ extends: corac
 # teacher's max over the bank). 16 steps matches the Predator-Prey preset.
 corac_segment_len: 16
 
+# MATE's return level moves from ~0 to ~500 during training. Without a floor
+# relative to that level, a batch whose returns sit in a narrow band explodes
+# z = (R - mean)/std, saturating phi(R) into a binary code and losing the
+# continuous resolution this method exists for. 0.05 keeps |z| bounded while
+# preserving the ordering of episodes (see hc_rac_audit.md 4.4).
+corac_min_std_frac: 0.05
+
 name: "corac_mate"
 wandb_tags: ["mate", "hcrac", "corac"]
