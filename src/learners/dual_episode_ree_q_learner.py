@@ -622,6 +622,15 @@ class DualEpisodeREEQLearner:
                 )
 
     def show_matrix_info(self, batch, t_env):
+        # The payoff printout enumerates the two-agent (ai, aj) action grid, so it
+        # only makes sense for two-agent matrix games. Guard instead of indexing
+        # out of bounds and killing the run.
+        if self.args.n_agents != 2:
+            print(
+                "show_matrix_info expects a two-agent matrix game; skipping "
+                "(n_agents={}).".format(self.args.n_agents)
+            )
+            return
         mac_out = []
         self.mac.init_hidden(batch.batch_size)
         for t in range(batch.max_seq_length):
@@ -659,28 +668,32 @@ class DualEpisodeREEQLearner:
                     raise Exception("Only for fully decentralized training.")
                 else:
                     mixer_qvals = th.zeros((1, 1, 1))
-                sp = "{0:.4}".format(str(chosen_action_qvals[0, 0, 0].item())) + "||" \
-                     + "{0:.4}".format(str(chosen_action_qvals[0, 0, 1].item())) \
-                     + "||" + "{0:.4}".format(str(counter_chosen_action_qvals[0, 0, 0].item())) \
-                     + "||" + "{0:.4}".format(str(counter_chosen_action_qvals[0, 0, 1].item())) \
-                     + "||" + "{0:.4}".format(str(context_action_qvals[0, 0, 0, 0].item())) \
-                     + "||" + "{0:.4}".format(str(context_action_qvals[0, 0, 0, 1].item())) \
-                     + "||" + "{0:.4}".format(str(context_action_qvals[0, 0, 0, 2].item())) \
-                     + "||" + "{0:.4}".format(str(context_action_qvals[0, 0, 0, 3].item())) \
-                     + "||" + "{0:.4}".format(str(context_action_qvals[0, 0, 1, 0].item())) \
-                     + "||" + "{0:.4}".format(str(context_action_qvals[0, 0, 1, 1].item())) \
-                     + "||" + "{0:.4}".format(str(context_action_qvals[0, 0, 1, 2].item())) \
-                     + "||" + "{0:.4}".format(str(context_action_qvals[0, 0, 1, 3].item())) \
-                     + "||" + "{0:.4}".format(str(mixer_qvals[0, 0, 0].item())) + "     "
-                payoff += sp
+                # n_agents and slot_number are configurable, so build the row
+                # instead of hard-coding two agents and four slots.
+                fields = [
+                    "{0:.4f}".format(chosen_action_qvals[0, 0, a].item())
+                    for a in range(self.args.n_agents)
+                ]
+                fields += [
+                    "{0:.4f}".format(counter_chosen_action_qvals[0, 0, a].item())
+                    for a in range(self.args.n_agents)
+                ]
+                fields += [
+                    "{0:.4f}".format(context_action_qvals[0, 0, a, slot].item())
+                    for a in range(self.args.n_agents)
+                    for slot in range(context_action_qvals.shape[-1])
+                ]
+                fields.append("{0:.4f}".format(mixer_qvals[0, 0, 0].item()))
+                payoff += "||".join(fields) + "     "
                 # print(ai, aj, chosen_action_qvals[0, 0, 0].item(),
                 # chosen_action_qvals[0, 0, 1].item(), mixer_qvals[0, 0, 0].item())
             payoff += "\n"
         print(payoff)
         # max_actions = mac_out.max(dim=3)[1]
         max_actions = batch["actions"][:, :-1, :, 0]
-        print("Max actions is:", max_actions[0, 0, 0].item(), max_actions[0, 0, 1].item(),
-              "  ||   Reward is", batch["reward"][0, 0, 0].item())
+        print("Max actions is:", " ".join(
+            str(max_actions[0, 0, a].item()) for a in range(self.args.n_agents)
+        ), "  ||   Reward is", batch["reward"][0, 0, 0].item())
         # chosen_action_qvals = th.gather(mac_out[:, :-1], dim=3, index=actions).squeeze(3)
         # chosen_action_qvals = self.mixer(chosen_action_qvals, batch["state"][:, :-1])
         # print(mac_out.shape)
