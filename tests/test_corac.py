@@ -109,6 +109,22 @@ class ContrastiveContextLabelerTest(unittest.TestCase):
         self.assertIsNone(loss)  # no two disjoint windows in a 1-step episode
         self.assertTrue(th.equal(contexts[..., 8:], th.zeros_like(contexts[..., 8:])))
 
+    def test_pair_sampler_handles_episodes_holding_barely_two_windows(self):
+        """length == 2 * segment_len: interior starts have no disjoint partner.
+
+        The sampler used to draw one and then index an empty candidate list.
+        """
+        for seg, length in ((2, 4), (3, 6), (3, 7), (3, 8), (16, 32), (16, 33)):
+            labeler = ContrastiveContextLabeler(1, 3, 2, _args(corac_segment_len=seg))
+            lengths = th.full((4,), length)
+            for _ in range(60):
+                rows, t1s, t2s = labeler._sample_pairs(lengths)
+                self.assertEqual(len(rows), 4)
+                for t1, t2 in zip(t1s, t2s):
+                    self.assertGreaterEqual(abs(t1 - t2), seg, (seg, length, t1, t2))
+                    self.assertGreaterEqual(min(t1, t2), 0)
+                    self.assertLessEqual(max(t1, t2) + seg, length)
+
     def test_outcome_swap_keeps_state_and_never_reproduces_anchor(self):
         rewards = th.randint(0, 2, (16, 4)).float()
         batch = _batch(self.actions, rewards)

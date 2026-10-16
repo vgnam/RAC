@@ -188,6 +188,7 @@ if __name__ == '__main__':
             'pred_prey_ucvar_iql',
             'pred_prey_lucvar_iql',
             'corac',
+            'corac_mate',
             'pred_prey_corac',
             'lucvar_iql',
         ],

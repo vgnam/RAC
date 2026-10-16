@@ -1,0 +1,20 @@
+# HC-RAC preset for MATE (obstacle-free 4v8-0, 500-step episodes).
+#
+# Use it together with the MATE camera-entity env preset, which supplies the
+# agent/twin_agent pair, the replay cadence and kl_weight:
+#
+#   python src/main.py \
+#     --env-config mate_belief_entity_gru_4v8_0 --config corac_mate \
+#     --max-steps 500000 with seed=0 use_cuda=True device=0 \
+#     buffer_cpu_only=True use_wandb=True wandb_project=rac-mate
+#
+# See paper_revision/hc_rac_audit.md for the diagnostics that matter on MATE.
+extends: corac
+
+# 500-step episodes: single-step TCL windows are degenerate (u_e stops
+# separating episodes, so 32 of the 48 context dims only feed noise into the
+# teacher's max over the bank). 16 steps matches the Predator-Prey preset.
+corac_segment_len: 16
+
+name: "corac_mate"
+wandb_tags: ["mate", "hcrac", "corac"]

@@ -159,6 +159,12 @@ class ContrastiveContextLabeler(nn.Module):
                 continue
             t1 = int(th.randint(0, last_start + 1, (1,)).item())
             candidates = [t for t in range(last_start + 1) if abs(t - t1) >= seg]
+            if not candidates:
+                # An interior start has no disjoint partner when the episode holds
+                # barely two windows (length == 2 * seg). Start 0 always does,
+                # because last_start >= seg here.
+                t1 = 0
+                candidates = list(range(seg, last_start + 1))
             t2 = candidates[int(th.randint(0, len(candidates), (1,)).item())]
             rows.append(b)
             t1s.append(t1)
@@ -323,5 +329,12 @@ class ContrastiveContextLabeler(nn.Module):
         if loss is not None:
             stats["corac_nce_loss"] = loss.item()
         stats["corac_bank_size"] = float(min(int(self.bank_count), self.bank.shape[1]))
+        # Diagnostics (hc_rac_audit.md 7): a saturated phi means the context lost
+        # its resolution, and a batch-constant u means the TCL half is dead
+        # weight that only feeds noise into the teacher's max over the bank.
+        stats["corac_return_mean"] = float(self.return_mean)
+        stats["corac_return_std"] = float(self.return_var.clamp(min=1e-6).sqrt())
+        stats["corac_phi_saturated"] = float((phi.abs() > 0.999).float().mean())
+        stats["corac_embed_batch_std"] = float(embedding.std(dim=0).mean())
         steps = batch["obs"].shape[1]
         return contexts.unsqueeze(1).expand(-1, steps, -1, -1).contiguous(), loss, stats

@@ -401,11 +401,38 @@ class DualEpisodeREEQLearner:
                 ((chosen_twin_action_qvals.detach() * mask).sum() / mask_elems).item(),
                 t_env,
             )
+            twin_target_mean = (
+                (twin_targets.detach() * mask).sum() / mask_elems
+            ).item()
+            self.logger.log_stat("twin_target_mean", twin_target_mean, t_env)
+            # Diagnostics for the twin ratchet (hc_rac_audit.md 3.1-3.2): the
+            # twin bootstraps with max_a' Q, so its target should stay inside the
+            # range of returns the batch actually realised. A ratio well above 1
+            # that keeps growing means the teacher is imitating values no episode
+            # reached, which is what the behaviour Q's KL then copies.
             self.logger.log_stat(
-                "twin_target_mean",
-                ((twin_targets.detach() * mask).sum() / mask_elems).item(),
+                "twin_target_over_return_max",
+                twin_target_mean / max(float(episode_returns.max()), 1e-3),
                 t_env,
             )
+            self.logger.log_stat(
+                "teacher_q_mean",
+                teacher_context_q.detach().mean().item(),
+                t_env,
+            )
+            self.logger.log_stat("kl_constraint", kl_loss.item(), t_env)
+            hyper_head = getattr(self.mac.twin_agent, "hyper_head", None)
+            if hyper_head is not None and bank is not None and bank.numel() > 0:
+                with th.no_grad():
+                    delta = hyper_head.delta(bank)
+                    self.logger.log_stat(
+                        "twin_delta_relative_scale",
+                        (
+                            delta.norm(dim=-1).mean()
+                            / hyper_head.base_weight.norm().clamp_min(1e-6)
+                        ).item(),
+                        t_env,
+                    )
 
             terminal_flags = terminated.expand_as(twin_td_error)
             terminal_mask = mask * terminal_flags

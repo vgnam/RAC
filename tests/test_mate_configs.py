@@ -21,3 +21,17 @@ def test_belief_entity_gru_target_sparse_preset_is_consistent():
     assert config["mate_num_obstacles"] == 9
     assert config["agent"] == "mate_entity_gru"
     assert config["twin_agent"] == "mate_entity_gru_twin"
+
+
+def test_corac_mate_preset_is_consistent():
+    alg = _load_config("corac_mate", "algs")
+    env = _load_config("mate_belief_entity_gru_4v8_0", "envs")
+
+    assert alg["context_labeler"] == "corac"
+    assert alg["corac_segment_len"] == 16  # 500-step episodes need real windows
+    assert alg["twin_target_clamp"] is True
+    assert alg["context_dim"] == alg["corac_n_freq"] + alg["corac_embed_dim"]
+    # The env preset is still the one that picks the camera-entity twin.
+    assert env["agent"] == "mate_entity_gru"
+    assert env["twin_agent"] == "mate_entity_gru_twin"
+    assert env["mate_num_obstacles"] == 0
