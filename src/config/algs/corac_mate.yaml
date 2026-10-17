@@ -16,12 +16,20 @@ extends: corac
 # teacher's max over the bank). 16 steps matches the Predator-Prey preset.
 corac_segment_len: 16
 
-# MATE's return level moves from ~0 to ~500 during training. Without a floor
-# relative to that level, a batch whose returns sit in a narrow band explodes
-# z = (R - mean)/std, saturating phi(R) into a binary code and losing the
-# continuous resolution this method exists for. 0.05 keeps |z| bounded while
-# preserving the ordering of episodes (see hc_rac_audit.md 4.4).
-corac_min_std_frac: 0.05
+# MATE's return level moves from ~0 to ~500 during training, so the EMA
+# standardisation of phi(R) kept remapping the same return to a different
+# context (and needed corac_min_std_frac to avoid saturation). A fixed range,
+# the same one RAC's slots use (mate_return_min/max), keeps phi stationary.
+corac_return_range: [0.0, 1000.0]
+
+# The twin and the teacher read u from an EMA copy of the TCL encoder, so the
+# context distribution drifts like a target network instead of every update.
+corac_target_tau: 0.005
+
+# batch_size 32 replaced the whole 64-context bank every two updates, so the
+# teacher's max ran over a new support each time. Two pushes per update turn
+# the bank over in ~32 updates.
+corac_bank_push: 2
 
 name: "corac_mate"
 wandb_tags: ["mate", "hcrac", "corac"]

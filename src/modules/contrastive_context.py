@@ -24,6 +24,7 @@ for training; execution is unchanged from RAC.
 See paper_revision/hc_rac_method.md.
 """
 
+import copy
 import math
 
 import torch as th
@@ -84,6 +85,24 @@ class ContrastiveContextLabeler(nn.Module):
         self.stat_momentum = float(getattr(args, "corac_stat_momentum", 0.01))
         # 0 disables the relative floor (historical behaviour); MATE uses 0.05.
         self.min_std_frac = float(getattr(args, "corac_min_std_frac", 0.0))
+        # Fixed [low, high] return range for phi (as RAC's linspace bins). The EMA
+        # standardisation moves with the return level, so the same return maps
+        # to a different context as training improves; a fixed range does not.
+        return_range = getattr(args, "corac_return_range", None)
+        self.return_range = None
+        if return_range is not None:
+            low, high = (float(v) for v in return_range)
+            if low >= high:
+                raise ValueError(
+                    f"corac_return_range must be [low, high] with low < high, got {return_range}."
+                )
+            self.return_range = (low, high)
+        # > 0: contexts come from an EMA copy of the TCL encoder (like a target
+        # network), so u drifts slowly instead of with every optimiser step.
+        self.target_tau = float(getattr(args, "corac_target_tau", 0.0))
+        # > 0: once the bank is full, push only this many contexts per update, so
+        # the teacher's support turns over slowly instead of every two batches.
+        self.bank_push = int(getattr(args, "corac_bank_push", 0))
         bank_size = int(getattr(args, "corac_bank_size", 64))
 
         hidden_dim = int(getattr(args, "corac_hidden_dim", 64))
@@ -120,6 +139,16 @@ class ContrastiveContextLabeler(nn.Module):
             self.attention = nn.Linear(hidden_dim, 1)
             self.output = nn.Linear(hidden_dim, self.embed_dim)
 
+        self.target_encoder = None
+        if self.use_trajectory and self.target_tau > 0.0:
+            self.target_encoder = nn.ModuleDict(
+                {
+                    "step_net": copy.deepcopy(self.step_net),
+                    "attention": copy.deepcopy(self.attention),
+                    "output": copy.deepcopy(self.output),
+                }
+            ).requires_grad_(False)
+
         self.register_buffer("return_mean", th.zeros(()))
         self.register_buffer("return_var", th.ones(()))
         self.register_buffer("stats_initialised", th.zeros((), dtype=th.bool))
@@ -151,12 +180,29 @@ class ContrastiveContextLabeler(nn.Module):
             dim=-1,
         )
 
-    def encode(self, segments):
+    def encode(self, segments, target=False):
         """Encode segments of shape (..., L, F) into unit vectors (..., d)."""
-        hidden = self.step_net(segments)
-        weights = th.softmax(self.attention(hidden), dim=-2)
+        if target and self.target_encoder is not None:
+            step_net = self.target_encoder["step_net"]
+            attention = self.target_encoder["attention"]
+            output = self.target_encoder["output"]
+        else:
+            step_net, attention, output = self.step_net, self.attention, self.output
+        hidden = step_net(segments)
+        weights = th.softmax(attention(hidden), dim=-2)
         pooled = (weights * hidden).sum(dim=-2)
-        return F.normalize(self.output(pooled), dim=-1)
+        return F.normalize(output(pooled), dim=-1)
+
+    @th.no_grad()
+    def update_target(self):
+        """Polyak-average the online encoder into the context encoder."""
+        if self.target_encoder is None:
+            return
+        online = [self.step_net, self.attention, self.output]
+        targets = [self.target_encoder[k] for k in ("step_net", "attention", "output")]
+        for net, target_net in zip(online, targets):
+            for p, tp in zip(net.parameters(), target_net.parameters()):
+                tp.lerp_(p, self.target_tau)
 
     def _swap_outcomes(self, segments, outcomes):
         """Replace the (reward, obs-change) block of every step."""
@@ -164,7 +210,7 @@ class ContrastiveContextLabeler(nn.Module):
         stop = start + self.n_outcome_features
         return th.cat([segments[..., :start], outcomes, segments[..., stop:]], dim=-1)
 
-    def episode_embedding(self, features, lengths):
+    def episode_embedding(self, features, lengths, target=False):
         """Mean embedding of non-overlapping windows, shape (bs, n_agents, d).
 
         Episodes too short for two windows (no contrastive pair) get a zero vector.
@@ -178,7 +224,7 @@ class ContrastiveContextLabeler(nn.Module):
         windows = features[:, : n_segments * seg].reshape(
             bs, n_segments, seg, self.n_agents, -1
         ).transpose(2, 3)  # (bs, n_seg, n_agents, L, F)
-        embeddings = self.encode(windows)  # (bs, n_seg, n_agents, d)
+        embeddings = self.encode(windows, target=target)  # (bs, n_seg, n_agents, d)
         seg_ends = (th.arange(n_segments, device=features.device) + 1) * seg
         valid = (seg_ends.unsqueeze(0) <= lengths.unsqueeze(1)).float()  # (bs, n_seg)
         counts = valid.sum(dim=1).clamp(min=1.0)
@@ -346,14 +392,22 @@ class ContrastiveContextLabeler(nn.Module):
 
     def return_features(self, returns):
         """phi(g): cosine features of the return squashed to [0, 1], shape (..., n_freq)."""
-        z = (returns - self.return_mean) / self._effective_std()
-        squashed = th.sigmoid(1.702 * z)  # ~ standard normal CDF, order preserving
+        if self.return_range is not None:
+            low, high = self.return_range
+            squashed = ((returns - low) / (high - low)).clamp(0.0, 1.0)
+        else:
+            z = (returns - self.return_mean) / self._effective_std()
+            squashed = th.sigmoid(1.702 * z)  # ~ standard normal CDF, order preserving
         return th.cos(squashed.unsqueeze(-1) * self.frequencies)
 
     def _push_bank(self, contexts):
         """contexts (bs, n_agents, C) -> FIFO bank (n_agents, M, C)."""
         size = self.bank.shape[1]
-        contexts = contexts.detach().transpose(0, 1)[:, -size:]  # (n_agents, B, C)
+        contexts = contexts.detach()
+        if self.bank_push > 0 and int(self.bank_count) >= size:
+            keep = th.randperm(contexts.shape[0], device=contexts.device)[: self.bank_push]
+            contexts = contexts[keep]
+        contexts = contexts.transpose(0, 1)[:, -size:]  # (n_agents, B, C)
         start = int(self.bank_count) % size
         idx = (th.arange(contexts.shape[1], device=contexts.device) + start) % size
         self.bank[:, idx] = contexts
@@ -386,7 +440,7 @@ class ContrastiveContextLabeler(nn.Module):
                 parts.append(phi)
             if self.use_trajectory:
                 # (bs, n_agents, d), stop-gradient
-                embedding = self.episode_embedding(features, lengths)
+                embedding = self.episode_embedding(features, lengths, target=True)
                 parts.append(embedding)
             contexts = parts[0] if len(parts) == 1 else th.cat(parts, dim=-1)
         self._push_bank(contexts)

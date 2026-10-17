@@ -1,0 +1,18 @@
+# HC-RAC on MATE — step C of the stability ladder (see run_mate_stability.py).
+#
+# `action_max` lets every action pick its own luckiest context out of the bank,
+# so the teacher's softmax sharpens on noise as the bank grows. `context_argmax`
+# picks one context per step (the one with the highest greedy value) and keeps
+# that context's whole action distribution, which removes the per-action
+# cherry-picking without giving up the optimism.
+#
+#   A  corac_mate          fixed kl_weight, action_max teacher
+#   B  corac_mate_anneal   + kl_weight 1 -> 0 over [50k, 250k]
+#   C  corac_mate_argmax   + teacher_context_select: context_argmax
+#   D  corac_mate_stable   + top-k teacher + scale-free KL temperature
+extends: corac_mate_anneal
+
+teacher_context_select: "context_argmax"
+
+name: "corac_mate_argmax"
+wandb_tags: ["mate", "hcrac", "corac", "stability-C"]

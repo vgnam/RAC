@@ -27,6 +27,24 @@ double_q: True
 mixer:  # Mixer becomes None
 
 kl_weight: 10.0
+# Optional linear anneal of kl_weight to kl_weight_final over
+# [kl_anneal_start, kl_anneal_end] env steps; null keeps it constant.
+kl_weight_final: null
+kl_anneal_start: 0
+kl_anneal_end: 0
+
+# KL teacher over contexts: "action_max" (RAC: max over contexts per action),
+# "context_argmax" (one best context per step, its whole action distribution) or
+# "topk_mean" (mean of the k best contexts: low-variance, unbiased-ish optimism).
+teacher_context_select: "action_max"
+# k for teacher_context_select="topk_mean".
+teacher_topk: 4
+
+# Temperature on the Q logits of the teacher KL. 0 keeps the historical
+# softmax(Q) behaviour; > 0 divides Q by frac * (realised return spread), which
+# makes one kl_weight mean the same thing for returns in [0, 1] (LBF) and ~500
+# (MATE). See kl_logit_temperature in the learner.
+kl_logit_temperature_frac: 0.0
 
 slot_number: 4
 

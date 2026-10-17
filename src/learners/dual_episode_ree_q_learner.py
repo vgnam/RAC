@@ -16,6 +16,81 @@ from torch.distributions import Categorical
 from src.modules.contrastive_context import ContrastiveContextLabeler
 
 
+def discounted_return_bounds(rewards, mask, gamma):
+    """(low, high) of the discounted return-to-go over every valid step of a batch.
+
+    Q is a discounted value, so its realisable range is that of the discounted
+    return-to-go, not of the undiscounted episode return: with gamma = 0.99 and
+    500-step episodes the latter is ~5x too loose to bound anything. Both ends
+    include 0 (the value past termination). rewards, mask: (bs, T, 1).
+    """
+    rewards = rewards * mask
+    to_go = th.zeros_like(rewards)
+    running = th.zeros_like(rewards[:, 0])
+    for t in reversed(range(rewards.shape[1])):
+        running = rewards[:, t] + gamma * running
+        to_go[:, t] = running
+    valid = mask > 0
+    if not bool(valid.any()):
+        return 0.0, 0.0
+    to_go = to_go[valid]
+    return min(0.0, float(to_go.min())), max(0.0, float(to_go.max()))
+
+
+def select_teacher_q(context_q, avail_actions, mode, topk=None):
+    """Teacher Q over actions from Q for every context, (..., A, M) -> (..., A).
+
+    "action_max" (RAC) maxes over contexts separately for every action.
+    "context_argmax" picks one context per step, the one with the highest greedy
+    value, and keeps that context's whole action distribution: a per-action max
+    lets every action pick its own luckiest context out of a large bank, so the
+    teacher's softmax sharpens on noise as the bank grows.
+    "topk_mean" averages the k best contexts instead of taking the single
+    maximum. A max over a bank of M contexts is an upward-biased estimator of
+    the best teammate (the bias grows with M) and it jumps whenever the bank
+    turns over; the top-k mean keeps the optimism while roughly halving the
+    variance of the target, which is what the behaviour policy follows through
+    the KL.
+    """
+    if mode == "action_max":
+        return context_q.max(dim=-1)[0]
+    if mode == "topk_mean":
+        k = 4 if topk is None else int(topk)
+        if k <= 0:
+            raise ValueError(f"teacher top-k must be positive, got {k}.")
+        k = min(k, context_q.shape[-1])
+        return context_q.topk(k, dim=-1)[0].mean(dim=-1)
+    if mode != "context_argmax":
+        raise ValueError(
+            "teacher_context_select must be 'action_max', 'context_argmax' or "
+            f"'topk_mean', got {mode!r}."
+        )
+    available = avail_actions.unsqueeze(-1) > 0
+    context_values = context_q.masked_fill(~available, float("-inf")).max(dim=-2)[0]
+    best = context_values.argmax(dim=-1)  # (...,)
+    index = best[..., None, None].expand(*context_q.shape[:-1], 1)
+    return context_q.gather(-1, index).squeeze(-1)
+
+
+def kl_logit_temperature(return_low, return_high, frac):
+    """Temperature that makes the teacher KL scale free.
+
+    The KL is taken between ``softmax(Q)`` distributions, so its strength depends
+    on the magnitude of Q rather than on the shape of the preference: on LBF
+    (returns in [0, 1]) the softmax is almost uniform and the pull is weak and
+    diffuse, on MATE (returns ~500) it is nearly one-hot, i.e. a hard constraint
+    that can outvote the TD term. Dividing both distributions by a fraction of
+    the batch's realised return spread puts them on the same logit scale, so one
+    ``kl_weight`` means the same thing in both regimes. ``frac = 0`` disables it
+    and reproduces the historical ``Categorical(logits=Q)`` exactly.
+    """
+    frac = float(frac or 0.0)
+    if frac <= 0.0:
+        return 1.0
+    spread = abs(float(return_high) - float(return_low))
+    return max(1e-3, frac * max(spread, 1e-3))
+
+
 class DualEpisodeREEQLearner:
     def __init__(self, mac, scheme, logger, args):
         self.args = args
@@ -120,8 +195,11 @@ class DualEpisodeREEQLearner:
                 scheme["obs"]["vshape"], args.n_actions, args.n_agents, args
             )
             # The return-only ablation (corac_use_trajectory=false) has no trainable
-            # labeler parameters, so there is nothing for an optimiser to hold.
-            labeler_parameters = list(self.context_labeler.parameters())
+            # labeler parameters, so there is nothing for an optimiser to hold. The
+            # EMA context encoder (corac_target_tau > 0) is frozen, not optimised.
+            labeler_parameters = [
+                p for p in self.context_labeler.parameters() if p.requires_grad
+            ]
             self.labeler_optimiser = (
                 th.optim.Adam(
                     labeler_parameters, lr=getattr(args, 'corac_lr', 5e-4)
@@ -213,6 +291,7 @@ class DualEpisodeREEQLearner:
                 corac_loss.backward()
                 th.nn.utils.clip_grad_norm_(self.context_labeler.parameters(), self.args.grad_norm_clip)
                 self.labeler_optimiser.step()
+                self.context_labeler.update_target()
         belief_outputs = None
         belief_losses = None
         teacher_diagnostics = None
@@ -261,21 +340,35 @@ class DualEpisodeREEQLearner:
                 belief_outputs["shift"][:, :-1],
             )
         else:
-            teacher_context_q = counterfactual_twin_mac_out.max(dim=-1)[0]
+            teacher_context_q = select_teacher_q(
+                counterfactual_twin_mac_out,
+                avail_actions[:, :-1],
+                getattr(self.args, "teacher_context_select", "action_max"),
+                getattr(self.args, "teacher_topk", None),
+            )
 
+        return_low, return_high = discounted_return_bounds(
+            rewards, mask, self.args.gamma
+        )
         if bool(getattr(self.args, "twin_target_clamp", False)):
-            # Keep the teacher inside the realisable return range too: the point
+            # Keep the teacher inside the realisable value range too: the point
             # of RAC's optimism is to prefer the best teammates seen so far, not
             # to imitate values no episode ever reached.
-            teacher_context_q = teacher_context_q.clamp(
-                min=min(0.0, float(episode_returns.min())),
-                max=max(0.0, float(episode_returns.max())),
-            )
+            teacher_context_q = teacher_context_q.clamp(min=return_low, max=return_high)
 
         # Use counterfactual_twin_mac_out to guide the update of mac_out.
         # Calculate the corresponding softmax action distribution, shape=(bs, max_seq_length-1, n_agents, n_actions)
-        mac_q_dist = Categorical(logits=mac_out[:, :-1])
-        teacher_mac_q_dist = Categorical(logits=teacher_context_q.clone().detach())
+        # The temperature keeps the KL's strength independent of the env's
+        # return scale (see kl_logit_temperature); 0 keeps the old behaviour.
+        kl_temperature = kl_logit_temperature(
+            return_low,
+            return_high,
+            getattr(self.args, "kl_logit_temperature_frac", 0.0),
+        )
+        mac_q_dist = Categorical(logits=mac_out[:, :-1] / kl_temperature)
+        teacher_mac_q_dist = Categorical(
+            logits=teacher_context_q.clone().detach() / kl_temperature
+        )
 
         import torch.distributions as D
         kl_constraint = D.kl_divergence(mac_q_dist, teacher_mac_q_dist)     # Maybe (bs, max_seq_length-1, n_agents)
@@ -338,10 +431,8 @@ class DualEpisodeREEQLearner:
             # inflation to the whole bank, and the teacher's max over the bank
             # selects it. HC-RAC's stability argument (hc_rac_method.md, 4.3) is
             # that Q(tau, a; c) is bounded by the returns of the episodes that
-            # carry c, so enforce that bound explicitly.
-            lower = min(0.0, float(episode_returns.min()))
-            upper = max(0.0, float(episode_returns.max()))
-            twin_targets = twin_targets.clamp(min=lower, max=upper)
+            # carry c, so enforce that bound explicitly (in discounted units).
+            twin_targets = twin_targets.clamp(min=return_low, max=return_high)
 
         # Td-error
         td_error = (chosen_action_qvals - targets.detach())
@@ -357,7 +448,8 @@ class DualEpisodeREEQLearner:
         td_loss = (masked_td_error ** 2).sum() / mask.sum()
         twin_td_loss = (masked_twin_td_error ** 2).sum() / mask.sum()
 
-        loss = twin_td_loss + td_loss + self.args.kl_weight * kl_loss
+        kl_weight = self._kl_weight(t_env)
+        loss = twin_td_loss + td_loss + kl_weight * kl_loss
         if belief_losses is not None:
             loss = loss + float(
                 getattr(self.args, "belief_dynamics_weight", 1.0)
@@ -379,7 +471,8 @@ class DualEpisodeREEQLearner:
 
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
             self.logger.log_stat("td_loss", td_loss.item(), t_env)
-            self.logger.log_stat("kl_loss", (self.args.kl_weight * kl_loss).item(), t_env)
+            self.logger.log_stat("kl_loss", (kl_weight * kl_loss).item(), t_env)
+            self.logger.log_stat("kl_weight", kl_weight, t_env)
             self.logger.log_stat("twin_td_loss", twin_td_loss.item(), t_env)
             if corac_stats is not None:
                 for key, value in corac_stats.items():
@@ -421,12 +514,19 @@ class DualEpisodeREEQLearner:
                 twin_target_mean / max(float(episode_returns.max()), 1e-3),
                 t_env,
             )
+            # The same ratio in discounted units, the scale Q actually lives on.
+            self.logger.log_stat(
+                "twin_target_over_rtg_max",
+                twin_target_mean / max(return_high, 1e-3),
+                t_env,
+            )
             self.logger.log_stat(
                 "teacher_q_mean",
                 teacher_context_q.detach().mean().item(),
                 t_env,
             )
             self.logger.log_stat("kl_constraint", kl_loss.item(), t_env)
+            self.logger.log_stat("kl_logit_temperature", float(kl_temperature), t_env)
             hyper_head = getattr(self.mac.twin_agent, "hyper_head", None)
             if hyper_head is not None and bank is not None and bank.numel() > 0:
                 with th.no_grad():
@@ -439,6 +539,18 @@ class DualEpisodeREEQLearner:
                         ).item(),
                         t_env,
                     )
+                    # delta's norm also counts what every context shares (phi's
+                    # constant cos(0) feature plus the MLP biases); the spread
+                    # across the bank is what the teacher's max can exploit.
+                    if delta.shape[-2] > 1:
+                        self.logger.log_stat(
+                            "twin_delta_context_spread",
+                            (
+                                delta.std(dim=-2).norm(dim=-1).mean()
+                                / delta.mean(dim=-2).norm(dim=-1).mean().clamp_min(1e-6)
+                            ).item(),
+                            t_env,
+                        )
 
             terminal_flags = terminated.expand_as(twin_td_error)
             terminal_mask = mask * terminal_flags
@@ -573,6 +685,30 @@ class DualEpisodeREEQLearner:
 
             # self.logger.log_stat("grad_norm", grad_norm, t_env)
             self.log_stats_t = t_env
+
+    def _kl_weight(self, t_env):
+        """kl_weight, linearly annealed to kl_weight_final over [kl_anneal_start, kl_anneal_end].
+
+        The optimistic teacher helps while teammates still explore (it points at
+        the luckiest coordination seen so far), but once exploration has decayed
+        those lucky episodes no longer happen, and a constant pull towards them
+        keeps the policy chasing values it cannot reach. kl_weight_final = None
+        keeps the weight constant.
+        """
+        start = float(self.args.kl_weight)
+        final = getattr(self.args, "kl_weight_final", None)
+        if final is None:
+            return start
+        begin = float(getattr(self.args, "kl_anneal_start", 0))
+        end = float(getattr(self.args, "kl_anneal_end", begin))
+        if end < begin:
+            raise ValueError(f"kl_anneal_end ({end}) must be >= kl_anneal_start ({begin}).")
+        if t_env <= begin:
+            return start
+        if t_env >= end:
+            return float(final)
+        frac = (t_env - begin) / (end - begin)
+        return start + frac * (float(final) - start)
 
     def _update_targets(self):
         self.target_mac.load_state(self.mac)

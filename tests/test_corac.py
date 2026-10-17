@@ -170,6 +170,55 @@ class ContrastiveContextLabelerTest(unittest.TestCase):
         same = (hard[..., start:stop] == anchor[:, None, :, start:stop]).all(-1).all(-1)
         self.assertFalse(bool((same & valid).any()))
 
+    def test_fixed_return_range_keeps_phi_stationary(self):
+        """The same return keeps the same phi however the return level moves."""
+        labeler = ContrastiveContextLabeler(1, 3, 2, _args(corac_return_range=[0.0, 10.0]))
+        returns = th.tensor([2.0, 5.0, 20.0])
+        before = labeler.return_features(returns)
+        with th.no_grad():
+            labeler.return_mean.fill_(500.0)
+            labeler.return_var.fill_(4.0)
+            labeler.stats_initialised.fill_(True)
+        self.assertTrue(th.equal(before, labeler.return_features(returns)))
+        # Out-of-range returns clamp to the top of the range; order is kept.
+        self.assertTrue(th.allclose(before[2], th.cos(labeler.frequencies)))
+        self.assertLess(before[1, 1].item(), before[0, 1].item())
+        with self.assertRaises(ValueError):
+            ContrastiveContextLabeler(1, 3, 2, _args(corac_return_range=[1.0, 1.0]))
+
+    def test_target_encoder_lags_the_online_encoder(self):
+        labeler = ContrastiveContextLabeler(1, 3, 2, _args(corac_target_tau=0.1))
+        trainable = [p for p in labeler.parameters() if p.requires_grad]
+        frozen = [p for p in labeler.parameters() if not p.requires_grad]
+        self.assertEqual(len(trainable), len(frozen))
+        contexts, _, _ = labeler.label(self.batch, self.mask, t_env=0)
+        # Contexts come from the target copy, which starts equal to the online one.
+        features = labeler.step_features(self.batch)
+        lengths = self.mask[:, :, 0].sum(1).long()
+        online = labeler.episode_embedding(features, lengths)
+        self.assertTrue(th.allclose(contexts[:, 0, :, 8:], online))
+        with th.no_grad():
+            for p in labeler.step_net.parameters():
+                p.add_(1.0)
+        old = [p.clone() for p in labeler.target_encoder["step_net"].parameters()]
+        labeler.update_target()
+        for p, target, before in zip(
+            labeler.step_net.parameters(), labeler.target_encoder["step_net"].parameters(), old
+        ):
+            self.assertTrue(th.allclose(target, before + 0.1 * (p - before)))
+        # tau = 0 keeps the historical single encoder.
+        self.assertIsNone(ContrastiveContextLabeler(1, 3, 2, _args()).target_encoder)
+
+    def test_bank_push_limits_turnover_once_full(self):
+        labeler = ContrastiveContextLabeler(1, 3, 2, _args(corac_bank_size=8, corac_bank_push=2))
+        labeler.label(self.batch, self.mask, t_env=0)  # fills the bank (16 >= 8)
+        self.assertEqual(int(labeler.bank_count), 8)
+        before = labeler.support().clone()
+        labeler.label(self.batch, self.mask, t_env=0)
+        self.assertEqual(int(labeler.bank_count), 10)
+        changed = (labeler.support() != before).any(-1).any(0)  # (M,)
+        self.assertLessEqual(int(changed.sum()), 2)
+
 
 class HyperTwinTest(unittest.TestCase):
     def setUp(self):
@@ -331,6 +380,87 @@ class LearnerContextChecksTest(unittest.TestCase):
         unclamped, clamped = ordinary
         self.assertGreater(unclamped, 100.0)
         self.assertLessEqual(clamped, 0.05)
+
+    def test_clamp_bound_is_discounted_return_to_go(self):
+        from src.learners.dual_episode_ree_q_learner import discounted_return_bounds
+
+        # 500 steps of reward 1: episode return 500, but no discounted value
+        # can exceed (1 - 0.99^500) / 0.01 ~ 99.3.
+        rewards = th.ones(2, 500, 1)
+        mask = th.ones(2, 500, 1)
+        low, high = discounted_return_bounds(rewards, mask, 0.99)
+        self.assertEqual(low, 0.0)
+        self.assertAlmostEqual(high, (1 - 0.99 ** 500) / 0.01, places=3)
+        # Padding past the end of an episode is ignored.
+        mask[1, 10:] = 0.0
+        rewards[1, 10:] = 1000.0
+        self.assertAlmostEqual(discounted_return_bounds(rewards, mask, 0.99)[1], high, places=3)
+        # Negative rewards set the lower end.
+        self.assertLess(discounted_return_bounds(-rewards, th.ones(2, 500, 1), 0.99)[0], -99.0)
+
+    def test_kl_weight_anneal(self):
+        def weight(t, **overrides):
+            fake = SimpleNamespace(args=SimpleNamespace(kl_weight=0.5, **overrides))
+            return DualEpisodeREEQLearner._kl_weight(fake, t)
+
+        # Default: constant.
+        self.assertEqual(weight(10**6), 0.5)
+        schedule = dict(kl_weight_final=0.1, kl_anneal_start=100, kl_anneal_end=300)
+        self.assertEqual(weight(50, **schedule), 0.5)
+        self.assertAlmostEqual(weight(200, **schedule), 0.3)
+        self.assertAlmostEqual(weight(1000, **schedule), 0.1)
+        # A step schedule (start == end) is allowed.
+        self.assertAlmostEqual(weight(101, kl_weight_final=0.0, kl_anneal_start=100, kl_anneal_end=100), 0.0)
+        with self.assertRaises(ValueError):
+            weight(200, kl_weight_final=0.1, kl_anneal_start=300, kl_anneal_end=100)
+
+    def test_teacher_context_select(self):
+        from src.learners.dual_episode_ree_q_learner import select_teacher_q
+
+        # (A=3 actions, M=2 contexts). Context 0 is best overall (max 5); context 1
+        # only wins action 2 by luck.
+        q = th.tensor([[5.0, 1.0], [0.0, 1.0], [1.0, 4.0]])
+        avail = th.ones(3)
+        self.assertTrue(th.equal(select_teacher_q(q, avail, "action_max"), th.tensor([5.0, 1.0, 4.0])))
+        self.assertTrue(th.equal(select_teacher_q(q, avail, "context_argmax"), th.tensor([5.0, 0.0, 1.0])))
+        # Unavailable actions cannot decide which context is best.
+        avail = th.tensor([0, 1, 1])
+        self.assertTrue(th.equal(select_teacher_q(q, avail, "context_argmax"), th.tensor([1.0, 1.0, 4.0])))
+        with self.assertRaises(ValueError):
+            select_teacher_q(q, avail, "softmax")
+
+    def test_teacher_topk_mean_trades_bias_for_variance(self):
+        from src.learners.dual_episode_ree_q_learner import select_teacher_q
+
+        q = th.tensor([[5.0, 1.0], [0.0, 1.0], [1.0, 4.0]])
+        avail = th.ones(3)
+        # k=1 is exactly the max; k=M is the mean; in between is in between and
+        # never above the max (that is the point: less upward bias than max).
+        self.assertTrue(
+            th.equal(select_teacher_q(q, avail, "topk_mean", topk=1), th.tensor([5.0, 1.0, 4.0]))
+        )
+        two = select_teacher_q(q, avail, "topk_mean", topk=2)
+        self.assertTrue(th.allclose(two, th.tensor([3.0, 0.5, 2.5])))
+        self.assertTrue(bool((two <= q.max(dim=-1)[0]).all()))
+        self.assertTrue(bool((two >= q.mean(dim=-1)).all()))
+        # A bank smaller than k is not an error, it just averages everything.
+        self.assertTrue(th.allclose(select_teacher_q(q, avail, "topk_mean", topk=64), two))
+        self.assertEqual(select_teacher_q(q, avail, "topk_mean", topk=None).shape, q.max(dim=-1)[0].shape)
+        with self.assertRaises(ValueError):
+            select_teacher_q(q, avail, "topk_mean", topk=0)
+
+    def test_kl_logit_temperature_is_scale_free(self):
+        from src.learners.dual_episode_ree_q_learner import kl_logit_temperature
+
+        # Off by default: the historical Categorical(logits=Q) is reproduced.
+        self.assertEqual(kl_logit_temperature(0.0, 1.0, 0.0), 1.0)
+        self.assertEqual(kl_logit_temperature(0.0, 1000.0, None), 1.0)
+        # Invariant: the logit span of the softmax is spread / tau = 1 / frac,
+        # so a return range of 1 (LBF) and of 1000 (MATE) end up equally sharp.
+        self.assertAlmostEqual(1.0 / kl_logit_temperature(0.0, 1.0, 0.1), 10.0)
+        self.assertAlmostEqual(1000.0 / kl_logit_temperature(0.0, 1000.0, 0.1), 10.0)
+        # Degenerate spread (all returns equal) stays finite and positive.
+        self.assertGreater(kl_logit_temperature(5.0, 5.0, 0.1), 0.0)
 
     def test_labeler_state_round_trips_through_checkpoints(self):
         import tempfile

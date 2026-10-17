@@ -1,0 +1,39 @@
+# HC-RAC on LBF 5x5-2p-1f-coop — the same stability fixes as corac_mate_stable,
+# applied to a 0/1 return instead of MATE's ~500.
+#
+# What the LBF logs showed (wandb exports, seed 0):
+#   * [phi(R); u] reaches 1.0 at 230k, then collapses four times (275k / 365k /
+#     470k / 725k) down to 0.03-0.09 = 1-3 of 32 test episodes, i.e. a
+#     deadlock, and only locks after ~820k;
+#   * the trajectory-only ablation never collapses, so the return half is the
+#     destabiliser: a binary return carries one bit, and once every episode
+#     returns 1 its batch variance goes to zero and phi saturates.
+#
+# Four changes, each targeting one mechanism:
+#   corac_return_range       phi stops moving when the return saturates
+#   corac_target_tau         u comes from an EMA encoder (context is a target)
+#   corac_bank_push          the teacher's support turns over in ~32 updates,
+#                            not every 2 (batch 32, bank 64)
+#   kl anneal + top-k + temp the optimism loop itself (see corac_mate_stable)
+#
+# Use with --env-config lbf (Foraging-5x5-2p-1f-coop-v3), e.g.
+#   python src/main.py --env-config lbf --config corac_lbf --max-steps 1000000 \
+#     with seed=0 use_cuda=True device=0
+extends: corac
+corac_return_range: [0.0, 1.0]
+corac_target_tau: 0.005
+corac_bank_push: 2
+
+# LBF episodes are <= 50 steps, so single-step TCL windows are fine; keep
+# segment_len at its inherited value (1) unless you also run a window ablation.
+kl_weight: 1.0
+kl_weight_final: 0.0
+kl_anneal_start: 200000
+kl_anneal_end: 1000000
+
+teacher_context_select: "topk_mean"
+teacher_topk: 4
+kl_logit_temperature_frac: 0.1
+
+name: "corac_lbf"
+wandb_tags: ["lbf", "hcrac", "corac"]

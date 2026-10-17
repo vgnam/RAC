@@ -1,0 +1,34 @@
+# HC-RAC on MATE — step D of the stability ladder (see run_mate_stability.py).
+#
+# Two changes on top of C, both aimed at the optimism loop rather than at the
+# hyperparameters:
+#
+# 1. `topk_mean` averages the k best contexts instead of taking the single
+#    maximum. A max over a bank of M contexts is an upward-biased estimate of
+#    the best teammate (the bias grows with M) and it jumps whenever the bank
+#    turns over; the mean of the top-k keeps the optimism with about half the
+#    variance. C's `context_argmax` is a single context again, so D overrides
+#    it rather than stacking on top.
+#
+# 2. `kl_logit_temperature_frac` divides the Q logits by a fraction of the
+#    realised return spread before the softmax. Without it the same kl_weight
+#    is a weak, diffuse pull on LBF (Q ~ 1, softmax almost uniform) and a hard
+#    one-hot constraint on MATE (Q ~ 100), which is why the two envs needed
+#    different kl_weight values at all.
+#
+# If D loses the early gain that A had (the teacher is what makes HC-RAC learn
+# faster), raise kl_logit_temperature_frac to 0.2-0.5 before touching kl_weight:
+# the whole point is that kl_weight should not need per-env tuning.
+#
+#   A  corac_mate          fixed kl_weight, action_max teacher
+#   B  corac_mate_anneal   + kl_weight 1 -> 0 over [50k, 250k]
+#   C  corac_mate_argmax   + teacher_context_select: context_argmax
+#   D  corac_mate_stable   + top-k teacher + scale-free KL temperature
+extends: corac_mate_argmax
+
+teacher_context_select: "topk_mean"
+teacher_topk: 4
+kl_logit_temperature_frac: 0.1
+
+name: "corac_mate_stable"
+wandb_tags: ["mate", "hcrac", "corac", "stability-D"]
