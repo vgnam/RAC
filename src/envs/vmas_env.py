@@ -66,6 +66,18 @@ class VMASEnv(MultiAgentEnv):
         self._reward_aggregation = reward_aggregation
         self.episode_limit = int(time_limit)
         self._device = th.device(device)
+        self.device = str(self._device)
+        # The simulator is meant to run on CPU even when the policy is on a GPU:
+        # with num_envs=1 every step would otherwise pay a host<->device transfer
+        # plus a kernel launch for a handful of bodies. Warn instead of silently
+        # accepting a much slower configuration.
+        if self._device.type != "cpu":
+            print(
+                "vmas: simulator device is {} but num_envs=1; CPU is usually "
+                "faster here. Pass env_args.device=cpu to silence this.".format(
+                    self._device
+                )
+            )
         self._env = make_env(
             scenario=self.scenario,
             num_envs=1,

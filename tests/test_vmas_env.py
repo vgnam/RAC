@@ -62,3 +62,16 @@ def test_vmas_env_rejects_out_of_range_actions():
     env.reset()
     with pytest.raises(ValueError, match="outside"):
         env.step(np.full(env.n_agents, env.n_actions))
+
+
+def test_vmas_simulator_runs_on_cpu_by_default():
+    """The env stays on CPU even for GPU training runs (num_envs=1)."""
+    from src.envs.vmas_env import VMASEnv
+    from src.main import _load_config
+
+    env = VMASEnv(scenario="navigation", time_limit=3)
+    assert env.device == "cpu"
+
+    config = _load_config("vmas", "envs")
+    assert config["env"] == "vmas"
+    assert config["env_args"]["device"] == "cpu"

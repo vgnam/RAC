@@ -13,7 +13,11 @@ env_args:
   continuous_actions: false    # Q-learners need a categorical action space
   time_limit: 50               # -> vmas max_steps
   reward_aggregation: "mean"   # team reward from the (usually shared) per-agent rewards
-  device: "cpu"                # a single VMAS env is faster on CPU than on GPU
+  # The simulator runs on CPU. This is independent of the learner's
+  # `use_cuda` / `device`: the policy stays on the GPU, only the physics and the
+  # observations are computed on CPU (one env, so every step would otherwise pay
+  # a host<->device transfer and a kernel launch for a handful of bodies).
+  device: "cpu"
 
 # RAC / HC-RAC context bins over the team return. VMAS rewards are frequently
 # negative (navigation pays -distance to the goal), so the default [0, 1] of the
