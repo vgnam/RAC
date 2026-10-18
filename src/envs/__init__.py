@@ -60,6 +60,15 @@ def _lbf_env(**kwargs):
 
 REGISTRY["lbf"] = partial(env_fn, env=_lbf_env)
 
+
+def _vmas_env(**kwargs):
+    # Imported lazily: vmas is only needed for VMAS runs.
+    from .vmas_env import VMASEnv
+    return VMASEnv(**kwargs)
+
+
+REGISTRY["vmas"] = partial(env_fn, env=_vmas_env)
+
 # REGISTRY["find_goals"] = partial(env_fn, env=MAFindGoals)
 # REGISTRY["find_treasure"] = partial(env_fn, env=MAFindTreasure)
 # REGISTRY["go_together"] = partial(env_fn, env=MAGoTogether)

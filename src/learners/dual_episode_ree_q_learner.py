@@ -185,6 +185,22 @@ class DualEpisodeREEQLearner:
                 low * horizon, high * horizon, num=args.slot_number + 1
             )
 
+        if 'vmas' in args.env:
+            # VMAS rewards are scenario dependent and usually negative
+            # (navigation pays -distance), so the bins cannot be hard-coded the
+            # way LBF's [0, 1] are. Calibrate vmas_return_min/max from the first
+            # ~20k steps of a run (episode_returns_min/max in the metrics CSV).
+            return_min = float(getattr(args, 'vmas_return_min', -2.0))
+            return_max = float(getattr(args, 'vmas_return_max', 0.0))
+            if return_min >= return_max:
+                raise ValueError(
+                    'vmas_return_min must be smaller than vmas_return_max, '
+                    f'got {return_min} >= {return_max}.'
+                )
+            self.possible_returns = np.linspace(
+                return_min, return_max, num=args.slot_number + 1
+            )
+
         print("possible returns", self.possible_returns)
 
         # Optional CoRAC labeler: replaces one-hot bin(R) by continuous contexts
@@ -269,7 +285,7 @@ class DualEpisodeREEQLearner:
             onehot_return_indices = np.eye(self.args.slot_number, dtype=np.int32)[return_indices]  # (bs, max_seq_length, n_agents, slot_number)
             onehot_return_indices = th.from_numpy(onehot_return_indices).to(device=self.args.device, dtype=th.float32)
 
-        elif any(name in self.args.env for name in ("stag_hunt", "sc2", "mate", "lbf", "matrix_game_repeated")):
+        elif any(name in self.args.env for name in ("stag_hunt", "sc2", "mate", "lbf", "vmas", "matrix_game_repeated")):
             returns_expand_flat = returns_expand.reshape(-1)    # (bs*max_seq_length*n_agents)
             return_index = np.digitize(returns_expand_flat, bins=self.possible_returns, right=False) - 1
             return_index = np.clip(return_index, 0, self.args.slot_number - 1)

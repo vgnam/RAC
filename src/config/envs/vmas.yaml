@@ -1,0 +1,32 @@
+# VMAS (Vectorized Multi-Agent Simulator) — https://github.com/proroklab/VectorizedMultiAgentSimulator
+#
+# Scenarios: balance, navigation, sampling, transport, dispersion, discovery,
+# flocking, give_way, joint_passage, passage, ball_passage, football, wheel, ...
+# Override per run, e.g.
+#   with env_args.scenario=dispersion env_args.time_limit=100 \
+#        vmas_return_min=-3 vmas_return_max=0
+env: vmas
+
+env_args:
+  scenario: "navigation"
+  num_envs: 1                  # the episode runner drives one environment
+  continuous_actions: false    # Q-learners need a categorical action space
+  time_limit: 50               # -> vmas max_steps
+  reward_aggregation: "mean"   # team reward from the (usually shared) per-agent rewards
+  device: "cpu"                # a single VMAS env is faster on CPU than on GPU
+
+# RAC / HC-RAC context bins over the team return. VMAS rewards are frequently
+# negative (navigation pays -distance to the goal), so the default [0, 1] of the
+# LBF preset does not apply. Calibrate per scenario: run ~20k steps, read
+# episode_returns_min / episode_returns_max from the metrics CSV, then set these
+# (and corac_return_range for HC-RAC so phi is stationary).
+vmas_return_min: -2.0
+vmas_return_max: 0.0
+
+t_max: 200000
+test_interval: 10000
+test_nepisode: 32
+test_greedy: True
+log_interval: 10000
+runner_log_interval: 10000
+learner_log_interval: 10000

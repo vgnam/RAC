@@ -33,6 +33,12 @@ kl_weight_final: null
 kl_anneal_start: 0
 kl_anneal_end: 0
 
+# Bound the twin's bootstrap target (and the teacher) by the batch's realised
+# discounted return. RAC runs unclamped for backward compatibility; the twin
+# ratchets without it (measured 217x the episode return on LBF), so turn it on
+# for any new RAC baseline. HC-RAC (corac.yaml) always enables it.
+twin_target_clamp: false
+
 # KL teacher over contexts: "action_max" (RAC: max over contexts per action),
 # "context_argmax" (one best context per step, its whole action distribution) or
 # "topk_mean" (mean of the k best contexts: low-variance, unbiased-ish optimism).

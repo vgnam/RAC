@@ -1,0 +1,28 @@
+# HC-RAC on VMAS — the corac_lbf/corac_mate_stable stability settings, with the
+# return range calibrated for VMAS instead of LBF's [0, 1].
+#
+#   --env-config vmas --config corac_vmas
+#
+# VMAS navigation pays -distance every step, so the team return is negative
+# (roughly [-2, 0] for 50 steps with reward_aggregation="mean"). The range below
+# must match env_args/time_limit and the scenario; calibrate it from
+# episode_returns_min/max of a 20k-step probe run and keep
+# corac_return_range in sync with vmas_return_min/vmas_return_max.
+extends: corac
+
+corac_return_range: [-2.0, 0.0]   # keep equal to vmas_return_min / vmas_return_max
+corac_target_tau: 0.005
+corac_bank_push: 2
+corac_segment_len: 4
+
+kl_weight: 1.0
+kl_weight_final: 0.0
+kl_anneal_start: 50000
+kl_anneal_end: 200000
+
+teacher_context_select: "topk_mean"
+teacher_topk: 4
+kl_logit_temperature_frac: 0.1
+
+name: "corac_vmas"
+wandb_tags: ["vmas", "hcrac", "corac"]
