@@ -1,0 +1,8 @@
+# Overcooked-AI (2-player cooperative cooking gridworld).
+#
+# Requires numpy<2 on Kaggle (already pinned in requirements-kaggle.txt) and
+# pygame only for rendering. Overcooked-AI's own Action.sample breaks on newer
+# numpy (np.random.choice over a mixed tuple/str action list), but this wrapper
+# never samples: the Q-learners pick action indices, which are mapped to
+# Action.INDEX_TO_ACTION directly.
+overcooked-ai==1.1.0

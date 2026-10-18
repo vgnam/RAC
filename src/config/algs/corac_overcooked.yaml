@@ -1,0 +1,36 @@
+# HC-RAC on Overcooked — the stability-ladder D settings (stationary context,
+# annealed KL, top-k teacher, scale-free KL temperature).
+#
+#   --env-config overcooked_<layout> --config corac_overcooked
+#
+# corac_return_range must match the return range of the *layout* you run, i.e.
+# the same numbers as overcooked_return_min / overcooked_return_max in the env
+# preset (the default here matches the easiest layouts):
+#
+#   cramped_room / asymmetric_advantages   [0, 120]
+#   coordination_ring                      [0, 100]
+#   counter_circuit_o_1order               [0,  80]
+#   forced_coordination                    [0,  60]
+#
+# Passing it on the command line (`corac_return_range=[0.0,60.0]`) keeps the two
+# in sync without editing this file.
+extends: corac
+
+corac_return_range: [0.0, 120.0]
+corac_target_tau: 0.005
+corac_bank_push: 2
+# Overcooked episodes are 200 steps, so single-step TCL windows are degenerate;
+# 10 steps gives the encoder real behaviour to contrast, and ~20 windows/episode.
+corac_segment_len: 10
+
+kl_weight: 1.0
+kl_weight_final: 0.0
+kl_anneal_start: 50000
+kl_anneal_end: 250000
+
+teacher_context_select: "topk_mean"
+teacher_topk: 4
+kl_logit_temperature_frac: 0.1
+
+name: "corac_overcooked"
+wandb_tags: ["overcooked", "hcrac", "corac"]

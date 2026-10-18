@@ -1,0 +1,40 @@
+# Overcooked-AI — https://github.com/HumanCompatibleAI/overcooked_ai
+#
+# Two agents, 6 discrete actions (stay, N/S/E/W, interact), shared reward of 20
+# per delivered soup. The five presets below are one per difficulty level:
+#
+#   overcooked_cramped_room          level 1 (easiest)
+#   overcooked_coordination_ring     level 2
+#   overcooked_asymmetric_advantages level 3
+#   overcooked_counter_circuit       level 4
+#   overcooked_forced_coordination   level 5 (hardest)
+env: overcooked
+
+env_args:
+  layout: "cramped_room"
+  horizon: 200                 # episode length; Overcooked has no early terminal
+  # "lossless" = the full grid encoding (520 floats/agent) and it is also the
+  # *cheaper* one to compute (0.08 ms/call vs 0.31 ms for the compact
+  # featurizer, measured on cramped_room). "featurized" (96 floats/agent) only
+  # pays off if you want a 5x smaller network input.
+  obs: "lossless"
+  reward_shaping: "sparse"     # 20 per soup only; "shaped" adds the package's shaping
+  random_start_pos: true       # otherwise every episode starts identically
+  rnd_obj_prob_thresh: 0.0     # > 0 also randomises where onions/dishes start
+
+# RAC / HC-RAC context bins over the team return. With the sparse reward the
+# return is 20 * (soups delivered within the horizon), so the bins are multiples
+# of 20 and the range should be the number of soups a *trained* policy can reach.
+# Calibrate per layout from episode_returns_max of a ~100k-step IQL run: too wide
+# a range leaves the top slots empty (dead contexts), which is what killed RAC on
+# LBF. The per-layout presets carry a first estimate.
+overcooked_return_min: 0.0
+overcooked_return_max: 120.0
+
+t_max: 1000000
+test_interval: 10000
+test_nepisode: 32
+test_greedy: True
+log_interval: 10000
+runner_log_interval: 10000
+learner_log_interval: 10000

@@ -1,0 +1,16 @@
+# Overcooked difficulty 3/5 — asymmetric_advantages.
+#
+# Each agent has privileged access to one side of the kitchen (one can reach the
+# onion dispenser faster, the other the dish dispenser), so a policy has to
+# specialise instead of mirroring itself. This is the layout where
+# "optimism about the teammate" starts to matter. ~5-6 soups -> return ~120.
+extends: overcooked
+
+env_args:
+  layout: "asymmetric_advantages"
+
+overcooked_return_min: 0.0
+overcooked_return_max: 120.0     # ~6 soups
+
+name: "overcooked_asymmetric_advantages"
+wandb_tags: ["overcooked", "level3"]

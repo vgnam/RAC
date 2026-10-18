@@ -1,0 +1,16 @@
+# Overcooked difficulty 5/5 — forced_coordination.
+#
+# Only one agent can physically reach the pot, and only the other can reach part
+# of the counter, so the pair is forced to hand items over: pure coordination
+# with an asymmetric division of labour and no way to substitute for each other.
+# This is the layout usually reported as the hard one. ~2-3 soups -> return ~60.
+extends: overcooked
+
+env_args:
+  layout: "forced_coordination"
+
+overcooked_return_min: 0.0
+overcooked_return_max: 60.0      # ~3 soups
+
+name: "overcooked_forced_coordination"
+wandb_tags: ["overcooked", "level5"]

@@ -201,6 +201,21 @@ class DualEpisodeREEQLearner:
                 return_min, return_max, num=args.slot_number + 1
             )
 
+        if 'overcooked' in args.env:
+            # Sparse Overcooked return is 20 * soups delivered, so the attainable
+            # range is layout and horizon dependent; each env preset carries an
+            # estimate and the run's episode_returns_max refines it.
+            return_min = float(getattr(args, 'overcooked_return_min', 0.0))
+            return_max = float(getattr(args, 'overcooked_return_max', 120.0))
+            if return_min >= return_max:
+                raise ValueError(
+                    'overcooked_return_min must be smaller than '
+                    f'overcooked_return_max, got {return_min} >= {return_max}.'
+                )
+            self.possible_returns = np.linspace(
+                return_min, return_max, num=args.slot_number + 1
+            )
+
         print("possible returns", self.possible_returns)
 
         # Optional CoRAC labeler: replaces one-hot bin(R) by continuous contexts
@@ -285,7 +300,7 @@ class DualEpisodeREEQLearner:
             onehot_return_indices = np.eye(self.args.slot_number, dtype=np.int32)[return_indices]  # (bs, max_seq_length, n_agents, slot_number)
             onehot_return_indices = th.from_numpy(onehot_return_indices).to(device=self.args.device, dtype=th.float32)
 
-        elif any(name in self.args.env for name in ("stag_hunt", "sc2", "mate", "lbf", "vmas", "matrix_game_repeated")):
+        elif any(name in self.args.env for name in ("stag_hunt", "sc2", "mate", "lbf", "vmas", "overcooked", "matrix_game_repeated")):
             returns_expand_flat = returns_expand.reshape(-1)    # (bs*max_seq_length*n_agents)
             return_index = np.digitize(returns_expand_flat, bins=self.possible_returns, right=False) - 1
             return_index = np.clip(return_index, 0, self.args.slot_number - 1)

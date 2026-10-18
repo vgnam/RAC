@@ -69,6 +69,15 @@ def _vmas_env(**kwargs):
 
 REGISTRY["vmas"] = partial(env_fn, env=_vmas_env)
 
+
+def _overcooked_env(**kwargs):
+    # Imported lazily: overcooked_ai is only needed for Overcooked runs.
+    from .overcooked_env import OvercookedEnv
+    return OvercookedEnv(**kwargs)
+
+
+REGISTRY["overcooked"] = partial(env_fn, env=_overcooked_env)
+
 # REGISTRY["find_goals"] = partial(env_fn, env=MAFindGoals)
 # REGISTRY["find_treasure"] = partial(env_fn, env=MAFindTreasure)
 # REGISTRY["go_together"] = partial(env_fn, env=MAGoTogether)

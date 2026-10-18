@@ -1,0 +1,16 @@
+# Overcooked difficulty 1/5 — cramped_room.
+#
+# One pot, one onion dispenser, one dish dispenser, a 5x4 kitchen. The easiest
+# layout: both agents can reach everything, so it mostly tests that the pipeline
+# learns at all. A decent policy delivers ~4-6 soups in 200 steps -> return
+# ~80-120.
+extends: overcooked
+
+env_args:
+  layout: "cramped_room"
+
+overcooked_return_min: 0.0
+overcooked_return_max: 120.0     # ~6 soups
+
+name: "overcooked_cramped_room"
+wandb_tags: ["overcooked", "level1"]
