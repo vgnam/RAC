@@ -2,14 +2,15 @@
 #
 # The pot and the serving station sit on a ring around a central block, so the
 # two agents constantly have to decide who goes which way round: pure
-# coordination, no resource contention. ~4-5 soups in 200 steps -> return ~100.
+# coordination, no resource contention. GreedyHumanModel scores ~12 (it never
+# finishes a soup here), so this is a literature-plausible trained estimate.
 extends: overcooked
 
 env_args:
   layout: "coordination_ring"
 
 overcooked_return_min: 0.0
-overcooked_return_max: 100.0     # ~5 soups
+overcooked_return_max: 250.0
 
 name: "overcooked_coordination_ring"
 wandb_tags: ["overcooked", "level2"]

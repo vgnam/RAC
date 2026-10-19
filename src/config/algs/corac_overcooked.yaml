@@ -7,16 +7,18 @@
 # the same numbers as overcooked_return_min / overcooked_return_max in the env
 # preset (the default here matches the easiest layouts):
 #
-#   cramped_room / asymmetric_advantages   [0, 120]
-#   coordination_ring                      [0, 100]
-#   counter_circuit_o_1order               [0,  80]
-#   forced_coordination                    [0,  60]
+#   cramped_room             [0, 250]
+#   coordination_ring        [0, 250]
+#   asymmetric_advantages    [0, 280]
+#   counter_circuit_o_1order [0, 140]
+#   forced_coordination      [0, 120]
+# (shaped-reward units; see src/config/envs/overcooked.yaml)
 #
 # Passing it on the command line (`corac_return_range=[0.0,60.0]`) keeps the two
 # in sync without editing this file.
 extends: corac
 
-corac_return_range: [0.0, 120.0]
+corac_return_range: [0.0, 250.0]
 corac_target_tau: 0.005
 corac_bank_push: 2
 # Overcooked episodes are 200 steps, so single-step TCL windows are degenerate;

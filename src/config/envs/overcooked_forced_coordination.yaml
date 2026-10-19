@@ -3,14 +3,15 @@
 # Only one agent can physically reach the pot, and only the other can reach part
 # of the counter, so the pair is forced to hand items over: pure coordination
 # with an asymmetric division of labour and no way to substitute for each other.
-# This is the layout usually reported as the hard one. ~2-3 soups -> return ~60.
+# This is the layout usually reported as the hard one: GreedyHumanModel scores 0
+# (it cannot do the handoff), so the trained estimate ~120 is a placeholder.
 extends: overcooked
 
 env_args:
   layout: "forced_coordination"
 
 overcooked_return_min: 0.0
-overcooked_return_max: 60.0      # ~3 soups
+overcooked_return_max: 120.0
 
 name: "overcooked_forced_coordination"
 wandb_tags: ["overcooked", "level5"]

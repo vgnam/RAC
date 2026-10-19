@@ -8,10 +8,13 @@ return bins actually get support in every slot.
 
 Two choices are exposed because they change the numbers a lot:
 
-* ``reward_shaping``: "sparse" (only 20 per soup) or "shaped" (the package's
+* ``reward_shaping``: "shaped" (default; delivery plus the package's
   BASE_REW_SHAPING_PARAMS: 3 per placement in pot, 3 per dish pickup, 5 per soup
-  pickup). Sparse is the default: the bins are then multiples of 20 and the
-  task is the one usually reported.
+  pickup) or "sparse" (only 20 per delivered soup). Note that the package's
+  ``OvercookedEnv.step`` returns the *sparse* reward only -- the shaped part is
+  reported separately in ``env_info`` -- so the wrapper composes the team reward
+  itself; reading the returned reward would silently disable shaping and leave
+  the whole soup chain unreachable at one update per 200-step episode.
 * ``obs``: "featurized" (96 floats per agent, ``mdp.featurize_state``) or
   "lossless" (520 per agent, the full grid encoding). Featurized is cheaper for
   the RNN; use "lossless" to compare against published baselines.
@@ -31,7 +34,7 @@ class OvercookedEnv(MultiAgentEnv):
         layout="cramped_room",
         horizon=200,
         obs="featurized",
-        reward_shaping="sparse",
+        reward_shaping="shaped",
         random_start_pos=True,
         rnd_obj_prob_thresh=0.0,
         seed=None,
@@ -117,10 +120,11 @@ class OvercookedEnv(MultiAgentEnv):
 
         state, reward, done, info = self._env.step(joint_action)
         self._obs = self._encode(state)
+        reward = self._compose_reward(info)
         delivered = int(np.sum(np.asarray(info.get("sparse_r_by_agent", 0)))) // self._sparse_per_soup
         self._soups += delivered
         return (
-            float(reward),
+            reward,
             bool(done),
             {"episode_limit": bool(done), "soups": delivered},
         )
@@ -170,6 +174,21 @@ class OvercookedEnv(MultiAgentEnv):
     def _reset_env(self):
         self._env.reset()
         return self._env.state
+
+    def _compose_reward(self, info):
+        """Team reward from the env's reward components.
+
+        ``OvercookedEnv.step`` returns *only* the sparse delivery reward
+        (``sum(sparse_reward_by_agent)``) and reports the shaped part separately
+        in ``env_info``, so reading the returned reward alone silently disables
+        reward shaping -- which leaves the whole soup chain unreachable for a
+        learner that updates once per 200-step episode. Compose it explicitly.
+        """
+        sparse = float(np.sum(np.asarray(info.get("sparse_r_by_agent", 0.0))))
+        if self._reward_shaping == "sparse":
+            return sparse
+        shaped = float(np.sum(np.asarray(info.get("shaped_r_by_agent", 0.0))))
+        return sparse + shaped
 
     def _encode(self, state):
         if self._obs_mode == "lossless":

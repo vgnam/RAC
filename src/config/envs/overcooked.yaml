@@ -18,18 +18,25 @@ env_args:
   # featurizer, measured on cramped_room). "featurized" (96 floats/agent) only
   # pays off if you want a 5x smaller network input.
   obs: "lossless"
-  reward_shaping: "sparse"     # 20 per soup only; "shaped" adds the package's shaping
+  # "shaped" = the package's BASE_REW_SHAPING_PARAMS on top of the 20 per soup
+  # (3 per placement in pot, 3 per dish pickup, 5 per soup pickup). Sparse only
+  # pays on delivery, and with one learner update per 200-step episode that is
+  # not discoverable: the wrapper composes the reward from env_info because
+  # OvercookedEnv.step returns the sparse part only.
+  reward_shaping: "shaped"
   random_start_pos: true       # otherwise every episode starts identically
   rnd_obj_prob_thresh: 0.0     # > 0 also randomises where onions/dishes start
 
 # RAC / HC-RAC context bins over the team return. With the sparse reward the
-# return is 20 * (soups delivered within the horizon), so the bins are multiples
-# of 20 and the range should be the number of soups a *trained* policy can reach.
-# Calibrate per layout from episode_returns_max of a ~100k-step IQL run: too wide
-# a range leaves the top slots empty (dead contexts), which is what killed RAC on
-# LBF. The per-layout presets carry a first estimate.
+# return is 20 * soups delivered *plus* the shaping terms (~17 per soup:
+# 3 per onion placed, 3 per dish pickup, 5 per soup pickup), so the range below is
+# in shaped units. The estimates come from the package's GreedyHumanModel pair
+# (max over 3 episodes per layout, horizon 200) pushed up to what a trained policy
+# can reach; refine per layout from episode_returns_max of a ~100k-step IQL run.
+# Too wide a range leaves the top slots empty (dead contexts), which is what killed
+# RAC on LBF -- with dense shaping the mass is continuous, so this is less fragile.
 overcooked_return_min: 0.0
-overcooked_return_max: 120.0
+overcooked_return_max: 250.0
 
 t_max: 1000000
 test_interval: 10000

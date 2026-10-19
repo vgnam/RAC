@@ -3,14 +3,14 @@
 # A long L-shaped circuit with a single order: the ingredients, the pot and the
 # serving station are spread along the corridor, so every soup needs a long
 # round trip and the two agents must not block each other in the corridor.
-# ~3-4 soups -> return ~80.
+# GreedyHumanModel scores ~52 here; a trained policy should reach ~140.
 extends: overcooked
 
 env_args:
   layout: "counter_circuit_o_1order"
 
 overcooked_return_min: 0.0
-overcooked_return_max: 80.0      # ~4 soups
+overcooked_return_max: 140.0
 
 name: "overcooked_counter_circuit"
 wandb_tags: ["overcooked", "level4"]
